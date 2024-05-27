@@ -13,7 +13,7 @@ from revolve2.modular_robot import ModularRobot
 from abrain import Genome as BodyOrBrainGenome, ANN3D
 from revolve2.modular_robot.body.v2 import BodyV2
 from revolve2.modular_robot.brain import BrainInstance, Brain
-from body import develop as develop_body
+from body import DefaultBodyPlan
 from brain import develop as develop_brain
 
 
@@ -74,7 +74,7 @@ class Genotype:
         return ModularRobot(body=body, brain=brain)
 
     def develop_body(self) -> BodyV2:
-        return develop_body(self.body)
+        return DefaultBodyPlan.develop(self.body)
 
     def develop_brain(self, body: BodyV2) -> Brain:
         return develop_brain(self.brain, body)

@@ -27,6 +27,10 @@ class ABrainInstance(BrainInstance):
         self._step = 0
         logging.info(f"Created a brain instance for {genome.id()}")
 
+        self.__brain_dead = True
+        if self.__brain_dead:
+            logging.warning("Brain dead!")
+
     def reset(self):
         self.brain.reset()
         self._step = 0
@@ -42,6 +46,10 @@ class ABrainInstance(BrainInstance):
     def control(self, dt: float,
                 sensor_state: ModularRobotSensorState,
                 control_interface: ModularRobotControlInterface) -> None:
+
+        if self.__brain_dead:
+            return
+
         # off = len(data.sensors)
         # self.i_buffer[:off] = [pos for pos in data.sensors]
         #
@@ -96,8 +104,6 @@ class ABrainFactory(BrainFactory):
         }
 
         if len(hinges_pos) != len(set(hinges_pos.values())):
-            logging.warning("Duplicate hinge positions detected."
-                            " Patching with small variations.")
             _duplicates = {}
             for m, p in hinges_pos.items():
                 _duplicates.setdefault(p, [])
@@ -108,10 +114,12 @@ class ABrainFactory(BrainFactory):
             def _shift(p, s): return __shift(p[0], s, xrange), __shift(p[1], s, yrange), __shift(p[2], s, zrange)
             def __shift(x, s, r): return max(-r, min(x+s*d, r))
             for p, ms in _duplicates.items():
-                assert len(ms) == 2
+                assert len(ms) == 2, "More than two hinges at the same place"
                 hinges_pos[ms[0]] = _shift(p, +1)
                 hinges_pos[ms[1]] = _shift(p, -1)
-            pprint.pprint(_duplicates)
+            logging.warning(f"Duplicate hinge positions detected:\n"
+                            f"{pprint.pformat(_duplicates)}."                            
+                            " Patching with small variations.")
 
         for i, (hinge, p) in enumerate(hinges_pos.items()):
             y = .05 * (p[2] + 1)
