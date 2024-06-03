@@ -1,8 +1,11 @@
 import abc
+import itertools
+import math
 import pprint
 from collections import defaultdict
 from dataclasses import dataclass
 from queue import Queue
+from random import Random
 from typing import Any, List
 
 import numpy as np
@@ -10,18 +13,49 @@ from abrain import Genome, CPPN
 from numpy.typing import NDArray
 from pyrr import Quaternion, Vector3
 from revolve2.modular_robot.body import AttachmentPoint, Module
-from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2
-
+from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV2
+from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
 
 _DEBUG = True
+
+
+def vec(*args): return Vector3([*args])
+
+
+class _Grid:
+    def __init__(self):
+        self._data = defaultdict(int)
+
+    def query(self, key: Vector3):
+        # print(f"query({key}):\n", pprint.pformat({k: v for k, v in self._iter(key)}))
+        return any(v > 0 for _, v in self._iter(key))
+
+    def collisions(self, key: Vector3):
+        return {
+            k: v for k, v in self._iter(key) if v > 0
+        }
+
+    def register(self, key: Vector3):
+        # print(f"register({key}):\n", pprint.pformat({k: v for k, v in self._iter(key)}))
+        for k, _ in self._iter(key):
+            self._data[k] += 1
+
+    def _iter(self, key: Vector3):
+        g_key = (2 * key).astype(np.int_)
+        # print(tuple(key), tuple(g_key))
+        for dx, dy, dz in itertools.product(*[[-1, 0]] * 3):
+            k = tuple(g_key + Vector3([dx, dy, dz]))
+            yield k, self._data[k]
+
+    def __repr__(self):
+        return pprint.pformat(self._data)
 
 
 class __BodyPlan(abc.ABC):
     @dataclass
     class _Module:
         position: Vector3[np.int_]
-        forward: Vector3[np.int_]
-        up: Vector3[np.int_]
+        rotation: Quaternion
         chain_length: int
         module_reference: Module
 
@@ -35,74 +69,91 @@ class __BodyPlan(abc.ABC):
     ) -> _Module | None:
         attachment_index, attachment_point = attachment_point_tuple
 
+        __prefix = f"{'  ' * module.chain_length}"
+        # if _DEBUG:
+        #     print(__prefix, "----")
+
+        if not module.module_reference.can_set_child(attachment_index):
+            print(__prefix, f">> Attachment {attachment_index} unavailable")
+            return None
+
+        def _debug_rotation(r: Quaternion):
+            return f"({r.axis}:{180*r.angle/math.pi})"
+
         """Here we adjust the forward facing direction, and the position for
          the new potential module."""
-        # forward = cls.__rotate(module.forward, module.up,
-        #                        attachment_point.orientation)
-        forward = attachment_point.offset
-        if _DEBUG:
-            print(module.position, forward)
-        position = (module.position + forward)
+        rotation = attachment_point.orientation * module.rotation
+        print(__prefix, ">>> Rotation:", rotation, _debug_rotation(rotation))
+        print(__prefix, "            =",
+              _debug_rotation(module.rotation), "*",
+              _debug_rotation(attachment_point.orientation))
+        print(__prefix, ">>> Position:", module.position)
+        forward = cls._rotate(rotation, vec(1.0, 0, 0))
+        print(__prefix, ">>>  Forward:", forward)
+
+        print(__prefix, ">>>   Offset:", attachment_point.offset)
+        offset = cls._vec3_sign(attachment_point.offset)
+        print(__prefix, "             ", offset)
+        if isinstance(module.module_reference, AttachmentFaceCoreV2):
+            offset.x += .5
+            offset.y /= 2
+            offset.z /= 2
+        print(__prefix, "             ", offset)
+        offset = cls._rotate(rotation, offset)
+        print(__prefix, "             ", offset)
+
+        position = (module.position + offset)
+        if _DEBUG and False:
+            def _fmt(__v, __w=10): return f"{str(__v):{__w}}"
+            print(__prefix, _fmt(module.position), _fmt(forward, 15),
+                  _fmt(offset, 20), _fmt(position, 20),
+                  attachment_index, module.module_reference.__class__.__name__)
         chain_length = module.chain_length + 1
 
         """If grid cell is occupied, we don't make a child."""
-        if _DEBUG:
-            print(f"grid[{tuple(position)}]={grid[tuple(position)]}")
-        if grid[tuple(position)] > 0:
+        if grid.query(position):
+            print(__prefix, ">> Collision(s)\n", pprint.pformat(grid.collisions(position)))
+            print(__prefix, ">> ===")
             return None
 
         """Now we adjust the position for the potential new module to fit the
          attachment point of the parent, additionally we query the CPPN for
           child type and angle of the child."""
-        new_pos = np.array(np.round(position + attachment_point.offset),
-                           dtype=np.int64)
-        child_type, angle = cls._evaluate_cppn(cppn, new_pos, chain_length)
+        child_type, angle = BrickV2, 0.0 #cls._evaluate_cppn(cppn, new_pos, chain_length)
+        # return None
 
-        """Here we check whether the CPPN evaluated to place a module and if
-         the module can be set on the parent."""
-        can_set = module.module_reference.can_set_child(attachment_index)
-        if (child_type is None) or (not can_set):
+        ## DEBUG ##
+        if ((isinstance(module.module_reference, AttachmentFaceCoreV2)
+                and attachment_index != 0) and
+                not isinstance(module.module_reference, BrickV2)):
+            return None
+        ###########
+
+        """Here we check whether the CPPN evaluated to place a module"""
+        if child_type is None:
             return None  # No module will be placed.
 
         """Now we know we want a child on the parent and we instantiate it, add
          the position to the grid and adjust the up direction for the new
           module."""
         child = child_type(angle)
-        grid[tuple(position)] += 1
-        up = cls.__rotate(module.up, forward,
-                          Quaternion.from_eulers([angle, 0, 0]))
+
+        grid.register(position)
+
         module.module_reference.set_child(child, attachment_index)
+
+        if _DEBUG:
+            print(__prefix, f"> Added module at {position}")
 
         return cls._Module(
             position,
-            forward,
-            up,
+            rotation,
             chain_length,
-            child,
+            child
         )
 
     @staticmethod
-    def __rotate(a: Vector3, b: Vector3, rotation: Quaternion) -> Vector3:
-        """
-        Rotates vector a, a given angle around b.
-
-        :param a: Vector a
-        :param b: Vector b.
-        :param rotation: The quaternion for rotation.
-        :returns: A rotated copy of `a`.
-        """
-        cos_angle: int = int(round(np.cos(rotation.angle)))
-        sin_angle: int = int(round(np.sin(rotation.angle)))
-
-        vec: Vector3 = (
-                a * cos_angle
-                + sin_angle * b.cross(a)
-                + (1 - cos_angle) * b.dot(a) * b
-        )
-        return vec
-
-    @staticmethod
-    def __vec3_int(vector: Vector3) -> Vector3[np.int_]:
+    def _vec3_int(vector: Vector3) -> Vector3[np.int_]:
         """
         Cast a Vector3 object to an integer only Vector3.
 
@@ -111,6 +162,16 @@ class __BodyPlan(abc.ABC):
         """
         return Vector3(list(map(lambda v: int(round(v)), vector)),
                        dtype=np.int64)
+
+    @staticmethod
+    def _vec3_sign(vector: Vector3) -> Vector3[np.int_]:
+        def sign(x): return 1 if x > 0 else -1 if x < 0 else 0
+        return Vector3(list(map(lambda v: sign(v), vector)),
+                       dtype=np.float64)
+
+    @staticmethod
+    def _rotate(rotation: Quaternion, vector: Vector3):
+        return (rotation * vector).round(1)
 
     @classmethod
     @abc.abstractmethod
@@ -129,43 +190,62 @@ class DefaultBodyPlan(__BodyPlan):
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"
 
-        max_parts = 20  # Determine the maximum parts available for a robots body.
+        rng = Random(0)
+
+        max_parts = 11
+        max_depth = 5
+
+        def limit(__n, __d):
+            if max_parts is not None:
+                return __n >= max_parts
+            return __d >= max_depth
+
         cppn = CPPN(genotype)
 
         to_explore: List[cls._Module] = []
-        grid = defaultdict(int)
+        grid = _Grid()
 
         body = BodyV2()
 
         core_position = Vector3([0, 0, 0], dtype=np.int_)
-        grid[tuple(core_position)] = 1
+        for dx, dy, dz in itertools.product(*[[-.5, .5]]*3):
+            grid.register(core_position+Vector3([dx, dy, dz]))
         part_count = 1
+        # pprint.pprint(grid)
 
-        for attachment_face in body.core_v2.attachment_faces.values():
+        faces = body.core_v2.attachment_faces.values()
+        # for attachment_face in faces:
+        for attachment_face in list(faces)[3:4]:
+        # for attachment_face in rng.sample(list(faces), k=len(faces)):
             to_explore.append(
                 cls._Module(
                     core_position,
-                    attachment_face._child_offset,
-                    Vector3([0, 0, 1]),
+                    Quaternion.from_axis_rotation(vec(0, 0, 1), math.pi),
+                    # Quaternion(),
                     0,
-                    attachment_face,
+                    attachment_face
                 )
             )
         # pprint.pprint(to_explore)
 
+        print("== Process start ====")
         while len(to_explore) > 0:
             module = to_explore.pop(0)
 
-            for attachment_point_tuple \
-                    in module.module_reference.attachment_points.items():
-                if _DEBUG:
-                    print(attachment_point_tuple)
-                if part_count < max_parts:
+            attachments = module.module_reference.attachment_points.items()
+            for attachment_point_tuple in rng.sample(attachments,
+                                                     k=len(attachments)):
+            # for attachment_point_tuple in attachments:
+                # if _DEBUG:
+                #     print(attachment_point_tuple)
+                if not limit(part_count, module.chain_length):
                     child = cls._add_child(cppn, module,
                                            attachment_point_tuple, grid)
                     if child is not None:
                         to_explore.append(child)
                         part_count += 1
+
+            print("== Module processed ====")
         return body
 
     @classmethod
