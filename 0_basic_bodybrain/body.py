@@ -22,33 +22,76 @@ _DEBUG = True
 def vec(*args): return Vector3([*args])
 
 
+@dataclass
+class AABB:
+    min: Vector3
+    max: Vector3
+
+
 class _Grid:
-    def __init__(self):
-        self._data = defaultdict(int)
+    def __init__(self, scaling: Vector3, debug=False):
+        self._data = defaultdict(list)
+        self._scaling = scaling
+        self._debug_data = defaultdict(list) if debug else None
 
-    def query(self, key: Vector3):
-        # print(f"query({key}):\n", pprint.pformat({k: v for k, v in self._iter(key)}))
-        return any(v > 0 for _, v in self._iter(key))
+    def query(self, position: Vector3, module: Module):
+        aabb = self._aabb(position, module)
+        self.__debug_print("query", position, aabb)
+        return any(
+            self._collision(aabb, _aabb)
+            for _, aabbs in self._iter(aabb)
+            for _aabb in aabbs
+        )
 
-    def collisions(self, key: Vector3):
-        return {
-            k: v for k, v in self._iter(key) if v > 0
+    def debug_collisions(self, position: Vector3, module: Module):
+        aabb = self._aabb(position, module)
+        dct = {
+            k: v for k, v in self._iter(aabb)
+            for _aabb in v if self._collision(aabb, _aabb)
         }
+        msg = (f"Between {aabb} and\n"
+               f"{pprint.pformat(dct)}")
+        return msg
 
-    def register(self, key: Vector3):
-        # print(f"register({key}):\n", pprint.pformat({k: v for k, v in self._iter(key)}))
-        for k, _ in self._iter(key):
-            self._data[k] += 1
+    def register(self, position: Vector3, module: Module, debug_info):
+        aabb = self._aabb(position, module)
+        print(position, module.bounding_box, aabb)
+        for k, _ in self._iter(aabb):
+            self._data[k].append(aabb)
+            if self._debug_data is not None:
+                self._debug_data[k].append(debug_info)
+        self.__debug_print("register", position, aabb)
 
-    def _iter(self, key: Vector3):
-        g_key = (2 * key).astype(np.int_)
-        # print(tuple(key), tuple(g_key))
-        for dx, dy, dz in itertools.product(*[[-1, 0]] * 3):
-            k = tuple(g_key + Vector3([dx, dy, dz]))
+    def _aabb(self, position: Vector3, module: Module):
+        mbb = module.bounding_box / 2
+        aabb = AABB(self._scaled(position - mbb),
+                    self._scaled(position + mbb))
+        return aabb
+
+    @staticmethod
+    def _collision(lhs: AABB, rhs: AABB) -> bool:
+        m = 1e-6
+        return (lhs.min.x < rhs.max.x + m and rhs.min.x < lhs.max.x + m
+                and lhs.min.y < rhs.max.y + m and rhs.min.y < lhs.max.y + m
+                and lhs.min.z < rhs.max.z + m and rhs.min.z < lhs.max.z + m)
+
+    def _iter(self, aabb: AABB):
+        for x, y, z in itertools.product(
+                *[range(math.floor(lower), math.ceil(upper))
+                  for lower, upper in zip(aabb.min, aabb.max)]):
+            k = (x, y, z)
             yield k, self._data[k]
 
     def __repr__(self):
         return pprint.pformat(self._data)
+
+    def _scaled(self, v: Vector3):
+        return Vector3([a * b for a, b in zip(v, self._scaling)])
+
+    def __debug_print(self, name, position, aabb):
+        print(f"{name}({position}:\n {aabb=}\n",
+              pprint.pformat({k: (self._data[k], self._debug_data[k])
+                              for k, v in self._iter(aabb)}))
 
 
 class __BodyPlan(abc.ABC):
@@ -66,6 +109,7 @@ class __BodyPlan(abc.ABC):
             module: _Module,
             attachment_point_tuple: tuple[int, AttachmentPoint],
             grid: NDArray[np.uint8],
+            _id: int
     ) -> _Module | None:
         attachment_index, attachment_point = attachment_point_tuple
 
@@ -82,27 +126,31 @@ class __BodyPlan(abc.ABC):
 
         """Here we adjust the forward facing direction, and the position for
          the new potential module."""
-        rotation = attachment_point.orientation * module.rotation
+        rotation = module.rotation * attachment_point.orientation
         print(__prefix, ">>> Rotation:", rotation, _debug_rotation(rotation))
         print(__prefix, "            =",
               _debug_rotation(module.rotation), "*",
               _debug_rotation(attachment_point.orientation))
-        print(__prefix, ">>> Position:", module.position)
         forward = cls._rotate(rotation, vec(1.0, 0, 0))
         print(__prefix, ">>>  Forward:", forward)
 
         print(__prefix, ">>>   Offset:", attachment_point.offset)
-        offset = cls._vec3_sign(attachment_point.offset)
-        print(__prefix, "             ", offset)
-        if isinstance(module.module_reference, AttachmentFaceCoreV2):
-            offset.x += .5
-            offset.y /= 2
-            offset.z /= 2
-        print(__prefix, "             ", offset)
+        offset = attachment_point.offset
+        # offset = cls._vec3_sign(attachment_point.offset)
+        # print(__prefix, "             ", offset)
+        # if isinstance(module.module_reference, AttachmentFaceCoreV2):
+        #     offset.x += .5
+        #     offset.y /= 2
+        #     offset.z /= 2
+        # print(__prefix, "             ", offset)
         offset = cls._rotate(rotation, offset)
         print(__prefix, "             ", offset)
 
+        print(__prefix, ">>> Position:", module.position)
         position = (module.position + offset)
+        print(__prefix, "             ", module.position, "+", offset)
+        print(__prefix, "             ", position)
+
         if _DEBUG and False:
             def _fmt(__v, __w=10): return f"{str(__v):{__w}}"
             print(__prefix, _fmt(module.position), _fmt(forward, 15),
@@ -110,27 +158,23 @@ class __BodyPlan(abc.ABC):
                   attachment_index, module.module_reference.__class__.__name__)
         chain_length = module.chain_length + 1
 
-        """If grid cell is occupied, we don't make a child."""
-        if grid.query(position):
-            print(__prefix, ">> Collision(s)\n", pprint.pformat(grid.collisions(position)))
-            print(__prefix, ">> ===")
-            return None
-
         """Now we adjust the position for the potential new module to fit the
          attachment point of the parent, additionally we query the CPPN for
           child type and angle of the child."""
-        child_type, angle = BrickV2, 0.0 #cls._evaluate_cppn(cppn, new_pos, chain_length)
+        child_type, angle = BrickV2, 0.0 #cls._evaluate_cppn(cppn, position, chain_length)
         # return None
 
         ## DEBUG ##
-        if ((isinstance(module.module_reference, AttachmentFaceCoreV2)
-                and attachment_index != 0) and
-                not isinstance(module.module_reference, BrickV2)):
-            return None
+        # if ((isinstance(module.module_reference, AttachmentFaceCoreV2)
+        #         and attachment_index != 0) and
+        #         not isinstance(module.module_reference, BrickV2)):
+        #     print("< Debug reject")
+        #     return None
         ###########
 
         """Here we check whether the CPPN evaluated to place a module"""
         if child_type is None:
+            print(__prefix, "< No child reject")
             return None  # No module will be placed.
 
         """Now we know we want a child on the parent and we instantiate it, add
@@ -138,12 +182,23 @@ class __BodyPlan(abc.ABC):
           module."""
         child = child_type(angle)
 
-        grid.register(position)
+        """ Shift along the main axis to get to the center """
+        position += cls._rotate(rotation, vec(.5 * child.bounding_box.x, 0, 0))
+        print(__prefix, ">>> Position:", position)
+
+        """Now we have the child, check if its AABB fits in the current grid"""
+        if False and grid.query(position, child):
+            print(__prefix, ">> Collision(s)\n",
+                  grid.debug_collisions(position, child))
+            print(__prefix, "< Collision reject")
+            return None
+
+        grid.register(position, child, _id)
 
         module.module_reference.set_child(child, attachment_index)
 
         if _DEBUG:
-            print(__prefix, f"> Added module at {position}")
+            print(__prefix, f"> Added module at {(100 * position).round(1)} cm")
 
         return cls._Module(
             position,
@@ -153,25 +208,8 @@ class __BodyPlan(abc.ABC):
         )
 
     @staticmethod
-    def _vec3_int(vector: Vector3) -> Vector3[np.int_]:
-        """
-        Cast a Vector3 object to an integer only Vector3.
-
-        :param vector: The vector.
-        :return: The integer vector.
-        """
-        return Vector3(list(map(lambda v: int(round(v)), vector)),
-                       dtype=np.int64)
-
-    @staticmethod
-    def _vec3_sign(vector: Vector3) -> Vector3[np.int_]:
-        def sign(x): return 1 if x > 0 else -1 if x < 0 else 0
-        return Vector3(list(map(lambda v: sign(v), vector)),
-                       dtype=np.float64)
-
-    @staticmethod
     def _rotate(rotation: Quaternion, vector: Vector3):
-        return (rotation * vector).round(1)
+        return rotation * vector
 
     @classmethod
     @abc.abstractmethod
@@ -190,9 +228,11 @@ class DefaultBodyPlan(__BodyPlan):
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"
 
-        rng = Random(0)
+        persistent_rng = Random(0)
 
-        max_parts = 11
+        def rng(): return Random(persistent_rng.random())
+
+        max_parts = 2#14
         max_depth = 5
 
         def limit(__n, __d):
@@ -203,27 +243,26 @@ class DefaultBodyPlan(__BodyPlan):
         cppn = CPPN(genotype)
 
         to_explore: List[cls._Module] = []
-        grid = _Grid()
 
         body = BodyV2()
+        grid = _Grid(2 / body.core_v2.bounding_box, debug=True)
 
         core_position = Vector3([0, 0, 0], dtype=np.int_)
-        for dx, dy, dz in itertools.product(*[[-.5, .5]]*3):
-            grid.register(core_position+Vector3([dx, dy, dz]))
+        grid.register(core_position, body.core_v2, 0)
         part_count = 1
         # pprint.pprint(grid)
 
         faces = body.core_v2.attachment_faces.values()
-        # for attachment_face in faces:
-        for attachment_face in list(faces)[3:4]:
-        # for attachment_face in rng.sample(list(faces), k=len(faces)):
+        for attachment_face in faces:
+        # for attachment_face in list(faces)[2:3]:
+        # for attachment_face in rng().sample(list(faces), k=len(faces)):
             to_explore.append(
                 cls._Module(
                     core_position,
-                    Quaternion.from_axis_rotation(vec(0, 0, 1), math.pi),
-                    # Quaternion(),
+                    # Quaternion.from_eulers([0, 0, -math.pi]),
+                    Quaternion(),
                     0,
-                    attachment_face
+                    attachment_face,
                 )
             )
         # pprint.pprint(to_explore)
@@ -233,19 +272,22 @@ class DefaultBodyPlan(__BodyPlan):
             module = to_explore.pop(0)
 
             attachments = module.module_reference.attachment_points.items()
-            for attachment_point_tuple in rng.sample(attachments,
-                                                     k=len(attachments)):
-            # for attachment_point_tuple in attachments:
+            # for attachment_point_tuple in rng().sample(attachments,
+            #                                            k=len(attachments)):
+            for attachment_point_tuple in attachments:
                 # if _DEBUG:
                 #     print(attachment_point_tuple)
                 if not limit(part_count, module.chain_length):
+                    print("> Module", part_count)
                     child = cls._add_child(cppn, module,
-                                           attachment_point_tuple, grid)
+                                           attachment_point_tuple, grid,
+                                           part_count)
                     if child is not None:
+                        print("< Module", part_count, "added")
                         to_explore.append(child)
                         part_count += 1
 
-            print("== Module processed ====")
+            # print("== Module processed ====")
         return body
 
     @classmethod
