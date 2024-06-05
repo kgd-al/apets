@@ -15,6 +15,7 @@ from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
+from body import compute_positions
 
 class ABrainInstance(BrainInstance):
     def __init__(self, genome: Genome,
@@ -27,7 +28,7 @@ class ABrainInstance(BrainInstance):
         self._step = 0
         logging.info(f"Created a brain instance for {genome.id()}")
 
-        self.__brain_dead = True
+        self.__brain_dead = False
         if self.__brain_dead:
             logging.warning("Brain dead!")
 
@@ -79,11 +80,15 @@ class ABrainFactory(BrainFactory):
         self._labels = {} if with_labels else None
         self._inputs, self._outputs, self._mapping = [], [], []
 
+        h_coords = {m: p for m, p in compute_positions(body)
+                    if isinstance(m, ActiveHinge)}
+
         hinges = body.find_modules_of_type(ActiveHinge)
         if len(hinges) == 0:
             return
 
         h_coords = {h: body.grid_position(h) for h in hinges}
+        pprint.pprint({m.uuid: p for m, p in h_coords.items()})
 
         bounds = np.zeros((2, 3), dtype=int)
         np.quantile([c.tolist() for c in h_coords.values()], [0, 1], axis=0, out=bounds)
@@ -113,12 +118,17 @@ class ABrainFactory(BrainFactory):
             d = 0.001
             def _shift(p, s): return __shift(p[0], s, xrange), __shift(p[1], s, yrange), __shift(p[2], s, zrange)
             def __shift(x, s, r): return max(-r, min(x+s*d, r))
+            def _pprint_duplicates():
+                return pprint.pformat({k: [m.uuid for m in v]
+                                       for k, v in _duplicates.items()})
             for p, ms in _duplicates.items():
-                assert len(ms) == 2, "More than two hinges at the same place"
+                assert len(ms) == 2, \
+                    (f"More than two hinges at the same place:\n"
+                     f" {_pprint_duplicates()}")
                 hinges_pos[ms[0]] = _shift(p, +1)
                 hinges_pos[ms[1]] = _shift(p, -1)
             logging.warning(f"Duplicate hinge positions detected:\n"
-                            f"{pprint.pformat(_duplicates)}."                            
+                            f"{_pprint_duplicates()}."                            
                             " Patching with small variations.")
 
         for i, (hinge, p) in enumerate(hinges_pos.items()):
