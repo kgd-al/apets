@@ -2,6 +2,7 @@ import logging
 import math
 import pprint
 from dataclasses import dataclass
+from random import Random
 from typing import List, Dict, Tuple
 
 import numpy as np
@@ -17,6 +18,7 @@ from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 from body import compute_positions
 
+
 class ABrainInstance(BrainInstance):
     def __init__(self, genome: Genome,
                  inputs: List[Point], outputs: List[Point],
@@ -31,6 +33,11 @@ class ABrainInstance(BrainInstance):
         self.__brain_dead = False
         if self.__brain_dead:
             logging.warning("Brain dead!")
+
+        self.__fake_brain = True
+        if self.__fake_brain:
+            logging.warning("Fake brain!")
+            self.rng = Random(0)
 
     def reset(self):
         self.brain.reset()
@@ -66,6 +73,10 @@ class ABrainInstance(BrainInstance):
 
         self.brain.__call__(self.i_buffer, self.o_buffer)
 
+        if hasattr(self, "rng"):
+            self.o_buffer[:] = [self.rng.random() * 2 - 1
+                                for _ in range(len(self.o_buffer))]
+
         for hinge, o_index in self._mapping:
             control_interface.set_active_hinge_target(
                 hinge, self.o_buffer[o_index] * hinge.range)
@@ -80,56 +91,64 @@ class ABrainFactory(BrainFactory):
         self._labels = {} if with_labels else None
         self._inputs, self._outputs, self._mapping = [], [], []
 
-        h_coords = {m: p for m, p in compute_positions(body)
+        h_coords = {m: p for m, p in compute_positions(body).items()
                     if isinstance(m, ActiveHinge)}
+        #
+        # hinges = body.find_modules_of_type(ActiveHinge)
+        # if len(hinges) == 0:
+        #     return
+        #
+        # h_coords = {h: body.grid_position(h) for h in hinges}
+        # pprint.pprint({m.uuid: p for m, p in h_coords.items()})
 
-        hinges = body.find_modules_of_type(ActiveHinge)
-        if len(hinges) == 0:
-            return
-
-        h_coords = {h: body.grid_position(h) for h in hinges}
-        pprint.pprint({m.uuid: p for m, p in h_coords.items()})
-
-        bounds = np.zeros((2, 3), dtype=int)
-        np.quantile([c.tolist() for c in h_coords.values()], [0, 1], axis=0, out=bounds)
+        bounds = np.zeros((2, 3), dtype=float)
+        if len(h_coords) > 0:
+            np.quantile([c.tolist() for c in h_coords.values()],
+                        [0, 1], axis=0, out=bounds)
 
         # if bounds[0][2] != bounds[1][2]:
         #     raise NotImplementedError("Can only handle planar robots (with z=0 for all modules)")
 
         x_min, x_max = bounds[0][0], bounds[1][0]
-        xrange = max(abs(x_min), abs(x_max), 1)
+        xrange = max(abs(x_min), abs(x_max)) or 1
         y_min, y_max = bounds[0][1], bounds[1][1]
-        yrange = max(abs(y_min), abs(y_max), 1)
+        yrange = max(abs(y_min), abs(y_max)) or 1
         z_min, z_max = bounds[0][2], bounds[1][2]
-        zrange = max(abs(z_min), abs(z_max), 1)
+        zrange = max(abs(z_min), abs(z_max)) or 1
 
         hinges_pos = {
             m: (c.x / xrange, c.y / yrange, c.z / zrange)
             for m, c in h_coords.items()
         }
+        # print(bounds)
+        # print(x_min, x_max, xrange)
+        # print(y_min, y_max, yrange)
+        # print(z_min, z_max, zrange)
+        # pprint.pprint({m.uuid: p for m, p in hinges_pos.items()})
 
-        if len(hinges_pos) != len(set(hinges_pos.values())):
-            _duplicates = {}
-            for m, p in hinges_pos.items():
-                _duplicates.setdefault(p, [])
-                _duplicates[p].append(m)
-            _duplicates = {k: v for k, v in _duplicates.items() if len(v) > 1}
-
-            d = 0.001
-            def _shift(p, s): return __shift(p[0], s, xrange), __shift(p[1], s, yrange), __shift(p[2], s, zrange)
-            def __shift(x, s, r): return max(-r, min(x+s*d, r))
-            def _pprint_duplicates():
-                return pprint.pformat({k: [m.uuid for m in v]
-                                       for k, v in _duplicates.items()})
-            for p, ms in _duplicates.items():
-                assert len(ms) == 2, \
-                    (f"More than two hinges at the same place:\n"
-                     f" {_pprint_duplicates()}")
-                hinges_pos[ms[0]] = _shift(p, +1)
-                hinges_pos[ms[1]] = _shift(p, -1)
-            logging.warning(f"Duplicate hinge positions detected:\n"
-                            f"{_pprint_duplicates()}."                            
-                            " Patching with small variations.")
+        assert len(hinges_pos) == len(set(hinges_pos.values()))
+        # if len(hinges_pos) != len(set(hinges_pos.values())):
+        #     _duplicates = {}
+        #     for m, p in hinges_pos.items():
+        #         _duplicates.setdefault(p, [])
+        #         _duplicates[p].append(m)
+        #     _duplicates = {k: v for k, v in _duplicates.items() if len(v) > 1}
+        #
+        #     d = 0.001
+        #     def _shift(p, s): return __shift(p[0], s, xrange), __shift(p[1], s, yrange), __shift(p[2], s, zrange)
+        #     def __shift(x, s, r): return max(-r, min(x+s*d, r))
+        #     def _pprint_duplicates():
+        #         return pprint.pformat({k: [m.uuid for m in v]
+        #                                for k, v in _duplicates.items()})
+        #     for p, ms in _duplicates.items():
+        #         assert len(ms) == 2, \
+        #             (f"More than two hinges at the same place:\n"
+        #              f" {_pprint_duplicates()}")
+        #         hinges_pos[ms[0]] = _shift(p, +1)
+        #         hinges_pos[ms[1]] = _shift(p, -1)
+        #     logging.warning(f"Duplicate hinge positions detected:\n"
+        #                     f"{_pprint_duplicates()}."
+        #                     " Patching with small variations.")
 
         for i, (hinge, p) in enumerate(hinges_pos.items()):
             y = .05 * (p[2] + 1)

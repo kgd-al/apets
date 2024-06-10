@@ -2,6 +2,7 @@
 import logging
 import pprint
 
+import abrain
 from revolve2.simulation.simulator import RecordSettings
 
 from genotype import Genotype
@@ -15,6 +16,8 @@ from revolve2.modular_robot_simulation import (
     simulate_scenes,
 )
 from revolve2.simulators.mujoco_simulator import LocalSimulator
+
+from brain import ABrainInstance
 
 
 class Evaluator(Eval):
@@ -55,6 +58,13 @@ class Evaluator(Eval):
         """
         logging.info(f"Starting evaluation of {len(population)} robots.")
         robots = [genotype.develop() for genotype in population]
+
+        if len(robots) == 1:
+            controller: ABrainInstance = robots[0].brain.make_instance()
+            brain: abrain.ANN3D = controller.brain
+            if not brain.empty():
+                brain.render3D().write_html("brain.html")
+
         # Create the scenes.
         scenes = []
         for robot in robots:
