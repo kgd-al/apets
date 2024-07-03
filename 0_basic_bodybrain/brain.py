@@ -34,7 +34,7 @@ class ABrainInstance(BrainInstance):
         if self.__brain_dead:
             logging.warning("Brain dead!")
 
-        self.__fake_brain = True
+        self.__fake_brain = False
         if self.__fake_brain:
             logging.warning("Fake brain!")
             self.rng = Random(0)

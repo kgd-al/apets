@@ -19,7 +19,7 @@ from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV
 from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
 
 
-_DEBUG = 10
+_DEBUG = -1
 
 
 def correctBrickV2Init(brick: BrickV2, rotation: float | RightAngles):
@@ -257,10 +257,10 @@ class __BodyPlan(abc.ABC):
         """Now we adjust the position for the potential new module to fit the
          attachment point of the parent, additionally we query the CPPN for
           child type and angle of the child."""
-        # child_type, angle = cls._evaluate_cppn(cppn, position, chain_length)
+        child_type, angle = cls._evaluate_cppn(cppn, position, chain_length)
         # child_type, angle = BrickV2, 0.0
         # child_type, angle = ActiveHingeV2, 0.0
-        child_type, angle = [BrickV2, ActiveHingeV2][_id%2], 0.0
+        # child_type, angle = [BrickV2, ActiveHingeV2][_id%2], 0.0
         # return None
 
         ## DEBUG ##
@@ -335,7 +335,7 @@ class DefaultBodyPlan(__BodyPlan):
         def rng(): return Random(persistent_rng.random())
 
         max_parts = None
-        max_depth = 5
+        max_depth = 3
 
         def limit(__n, __d):
             if max_parts is not None:
@@ -369,7 +369,8 @@ class DefaultBodyPlan(__BodyPlan):
             )
         # pprint.pprint(to_explore)
 
-        print("== Process start ====")
+        if _DEBUG >= 0:
+            print("== Process start ====")
         while len(to_explore) > 0:
             module = to_explore.pop(0)
 
@@ -398,13 +399,10 @@ class DefaultBodyPlan(__BodyPlan):
     def _evaluate_cppn(
             cls,
             cppn: CPPN,
-            position: Vector3[np.int_],
+            position: Vector3,
             chain_length: int,
     ) -> tuple[Any, float]:
         x, y, z = position
-        assert isinstance(
-            x, np.int_
-        ), f"Error: The position is not of type int. Type: {type(x)}."
         outputs = cppn.obuffer()
         cppn(outputs, x, y, z, chain_length)
 

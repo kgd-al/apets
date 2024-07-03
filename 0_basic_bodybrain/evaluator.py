@@ -39,7 +39,7 @@ class Evaluator(Eval):
         """
         self._simulator = LocalSimulator(
             headless=headless, num_simulators=num_simulators,
-            start_paused=(num_simulators == 1),
+            # start_paused=(num_simulators == 1),
             # viewer_type="native"
         )
         self._terrain = terrains.flat()
