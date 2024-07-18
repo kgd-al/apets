@@ -17,7 +17,7 @@ from revolve2.modular_robot.body.base import Body
 from revolve2.modular_robot.body.sensors import ActiveHingeSensor
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV2
 from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
-
+from revolve2.simulation.scene import _aabb, Pose
 
 _DEBUG = -1
 
@@ -35,35 +35,84 @@ def correctBrickV2Init(brick: BrickV2, rotation: float | RightAngles):
         print("[kgd-debug] Fixed BrickV2 initialization")
 
 
+# TODO This is not working well enough:
+# - Child is too far apart from parent
+# - Dimensions ratios are complete guesses without actual measurement (except the bb)
 def correctActiveHingeV2Init(hinge: ActiveHingeV2, rotation: float | RightAngles):
     w, h, d = 0.052, 0.052, 0.074
+    frame_offset = 0.04495  # Was 0.04525
+    servo_offset = 0.0239   # Was 0.0299
+    joint_offset = 0.0119   # not changed
+    frame_bounding_box = Vector3([0.018, 0.052, 0.0165891])
+    servo1_bounding_box = Vector3([0.05125, 0.0512, 0.020])
+    servo2_bounding_box = Vector3([0.002, 0.052, 0.052])
     super(ActiveHingeV2, hinge).__init__(
         rotation=rotation,
         range=1.047197551,
         effort=0.948013269,
         velocity=6.338968228,
-        frame_bounding_box=Vector3([0.018, 0.053, 0.0165891]),
-        frame_offset=0.04525,
-        servo1_bounding_box=Vector3([0.0583, 0.0512, 0.020]),
-        servo2_bounding_box=Vector3([0.002, 0.053, 0.053]),
+        # frame_bounding_box=Vector3([0.018, 0.053, 0.0165891]),
+        frame_bounding_box=frame_bounding_box,
+        # frame_bounding_box=Vector3([d, w, h]),
+        # frame_offset=0.04525,
+        frame_offset=frame_offset,
+        # servo1_bounding_box=Vector3([0.0583, 0.0512, 0.020]),
+        servo1_bounding_box=servo1_bounding_box,
+        servo2_bounding_box=servo2_bounding_box,
         frame_mass=0.01632,
         servo1_mass=0.058,
         servo2_mass=0.025,
-        servo_offset=0.0299,
-        joint_offset=0.0119,
+        servo_offset=servo_offset,
+        # servo_offset=0.0274,
+        joint_offset=joint_offset,
         static_friction=1.0,
         dynamic_friction=1.0,
-        armature=0.002,
+        # armature=0.002,
+        armature=0.2,
         pid_gain_p=5.0,
-        pid_gain_d=0.05,
-        child_offset=d / 2,
+        # pid_gain_p=10000.0,
+        # pid_gain_d=0.05,
+        pid_gain_d=0.1,
+        # child_offset=d - frame_offset/2 - servo_offset,
+        child_offset=servo1_bounding_box[0]/2 + 0.002 + 0.01,
         sensors=[
             ActiveHingeSensor()
         ],
     )
     hinge.bounding_box = Vector3([d, w, h])
     if _DEBUG >= 0:
-        print("[kgd-debug] Fixed ActiveHingeV2 initialization")
+        print("[kgd-debug] (Poorly) Fixed ActiveHingeV2 initialization")
+
+    if _DEBUG > 0 and True:
+        print("[kgd-debug]", "Testing bounding box == sum(geometries)")
+
+        servo_pos = vec(.5 * (hinge.servo1_bounding_box[0] + hinge.servo2_bounding_box[0]), 0, 0)
+        frame_pos = vec(.5 * hinge.frame_offset, 0, 0)
+        frame_pos_real = vec(.5 * hinge.frame_bounding_box[0], 0, 0)
+        servo_body_pos = frame_pos + vec(hinge.servo_offset, 0, 0)
+        joint_pos = frame_pos + vec(hinge.joint_offset, 0, 0)
+
+        def _aabb(pos, extent): return AABB(pos - .5 * extent, pos + .5 * extent)
+
+        frame_geom = _aabb(frame_pos_real, hinge.frame_bounding_box)
+
+        servo1_geom = _aabb(servo_body_pos, hinge.servo1_bounding_box)
+        servo2_geom = _aabb(servo_body_pos + servo_pos, hinge.servo2_bounding_box)
+
+        print(f"[kgd-debug]", "="*40)
+        total = AABB(vec(0, 0, 0), vec(0, 0, 0))
+        for aabb in [frame_geom, servo1_geom, servo2_geom]:
+            total.min = vec([min(a, b) for a, b in zip(total.min, aabb.min)])
+            total.max = vec([max(a, b) for a, b in zip(total.max, aabb.max)])
+
+        print(f"[kgd-debug]  frame_geom={frame_geom}")
+        print(f"[kgd-debug] servo1_geom={servo1_geom}")
+        print(f"[kgd-debug] servo2_geom={servo2_geom}")
+        print(f"[kgd-debug]       total={total}")
+        print(f"[kgd-debug]", "-"*40)
+        print(f"[kgd-debug]        aabb={hinge.bounding_box}")
+        bb = total.max - total.min
+        assert bb == hinge.bounding_box, f"{bb=} != {hinge.bounding_box=}"
 
 
 def correctCoreV2Init(
@@ -193,7 +242,8 @@ class _Grid:
 
     def __debug_print(self, name, position, aabb):
         print(f"{name}({position}:\n {aabb=}\n",
-              pprint.pformat({k: (self._data[k], self._debug_data[k])
+              pprint.pformat({k: {_k: _v for _k, _v in
+                                  zip(self._debug_data[k], self._data[k])}
                               for k, v in self._iter(aabb)}))
 
 
@@ -204,6 +254,7 @@ class __BodyPlan(abc.ABC):
         rotation: Quaternion
         chain_length: int
         module_reference: Module
+        id: int
 
     @classmethod
     def _add_child(
@@ -232,7 +283,7 @@ class __BodyPlan(abc.ABC):
          the new potential module."""
         rotation = module.rotation * attachment_point.orientation
         if _DEBUG > 0:
-            print(__prefix, ">>>   Attach:", attachment_index)
+            print(__prefix, ">>>   Attach:", f"{module.id}[{attachment_index}]")
             print(__prefix, ">>> Rotation:", rotation, _debug_rotation(rotation))
             print(__prefix, "            =",
                   _debug_rotation(module.rotation), "*",
@@ -263,6 +314,11 @@ class __BodyPlan(abc.ABC):
         # child_type, angle = [BrickV2, ActiveHingeV2][_id%2], 0.0
         # return None
 
+        if _DEBUG > 0:
+            print(__prefix, ">>>     CPPN:",
+                  child_type.__name__,
+                  f"{angle/math.pi:g}PI")
+
         ## DEBUG ##
         # if ((isinstance(module.module_reference, AttachmentFaceCoreV2)
         #         and attachment_index != 0) and
@@ -281,6 +337,15 @@ class __BodyPlan(abc.ABC):
          the position to the grid and adjust the up direction for the new
           module."""
         child = child_type(angle)
+
+        """ Update the rotation according to cppn output """
+        if _DEBUG > 0:
+            print(__prefix, ">>> Rotation:",
+                  _debug_rotation(rotation), "*",
+                  _debug_rotation(child.orientation))
+        rotation = rotation * child.orientation
+        if _DEBUG > 0:
+            print(__prefix, "            =", rotation, _debug_rotation(rotation))
 
         """ Shift along the main axis to get to the center """
         center_offset = rotation * vec(.5 * child.bounding_box.x, 0, 0)
@@ -310,7 +375,8 @@ class __BodyPlan(abc.ABC):
             position,
             rotation,
             chain_length,
-            child
+            child,
+            -1
         )
 
     @classmethod
@@ -324,9 +390,42 @@ class __BodyPlan(abc.ABC):
         pass
 
 
+def torso_body() -> BodyV2:
+    body = BodyV2()
+    body.core_v2.left_face.bottom = ActiveHingeV2(RightAngles.DEG_0)
+    body.core_v2.left_face.bottom.attachment = ActiveHingeV2(RightAngles.DEG_0)
+    body.core_v2.left_face.bottom.attachment.attachment = BrickV2(RightAngles.DEG_0)
+    body.core_v2.right_face.bottom = ActiveHingeV2(RightAngles.DEG_0)
+    body.core_v2.right_face.bottom.attachment = ActiveHingeV2(RightAngles.DEG_0)
+    body.core_v2.right_face.bottom.attachment.attachment = BrickV2(RightAngles.DEG_0)
+    return body
+
+
+def gecko_body() -> BodyV2:
+    def add_arms(m: Module):
+        m.left = ActiveHingeV2(math.pi / 2.0)
+        m.left.attachment = ActiveHingeV2(math.pi / 2.0)
+        m.left.attachment.attachment = BrickV2(0.0)
+        m.right = ActiveHingeV2(math.pi / 2.0)
+        m.right.attachment = ActiveHingeV2(math.pi / 2.0)
+        m.right.attachment.attachment = BrickV2(0.0)
+
+    body = BodyV2()
+    body.core.front.bottom = BrickV2(0.0)
+    add_arms(body.core.front.bottom)
+    body.core.back.bottom = BrickV2(0.0)
+    add_arms(body.core.back.bottom)
+
+    return body
+
+
 class DefaultBodyPlan(__BodyPlan):
     @classmethod
     def develop(cls, genotype: Genome) -> BodyV2:
+        # return gecko_body()
+        # if genotype.id() == 0:
+        #     return torso_body()
+
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"
 
@@ -365,6 +464,7 @@ class DefaultBodyPlan(__BodyPlan):
                     Quaternion(),
                     0,
                     attachment_face,
+                    0
                 )
             )
         # pprint.pprint(to_explore)
@@ -389,6 +489,7 @@ class DefaultBodyPlan(__BodyPlan):
                     if child is not None:
                         if _DEBUG > 0:
                             print("< Module", part_count, "added")
+                        child.id = part_count
                         to_explore.append(child)
                         part_count += 1
 

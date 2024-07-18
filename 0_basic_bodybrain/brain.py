@@ -1,17 +1,12 @@
 import logging
-import math
 import pprint
-from dataclasses import dataclass
 from random import Random
-from typing import List, Dict, Tuple
+from typing import List, Tuple
 
 import numpy as np
 from abrain import Genome, Point3D as Point, ANN3D as ANN
-from pyrr import Vector3, Quaternion
 from revolve2.modular_robot import ModularRobotControlInterface
-from revolve2.modular_robot.body import Module
-from revolve2.modular_robot.body.base import Body, ActiveHinge, Core
-from revolve2.modular_robot.body.base._body import _GridMaker
+from revolve2.modular_robot.body.base import Body, ActiveHinge
 from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
@@ -23,12 +18,17 @@ class ABrainInstance(BrainInstance):
     def __init__(self, genome: Genome,
                  inputs: List[Point], outputs: List[Point],
                  mapping: List[Tuple[ActiveHinge, int]]):
+        self.id = genome.id()
         self.brain = ANN.build(inputs, outputs, genome)
         self.i_buffer, self.o_buffer = self.brain.buffers()
         self._mapping = mapping
 
         self._step = 0
         logging.info(f"Created a brain instance for {genome.id()}")
+
+        # logging.warning(f"[kgd-debug:{self.id}] brain={pprint.pformat(self.brain.to_json(), width=200)}")
+        # logging.warning(f"[kgd-debug:{self.id}] i_buffer={pprint.pformat(list(self.i_buffer))}")
+        # logging.warning(f"[kgd-debug:{self.id}] o_buffer={pprint.pformat(list(self.o_buffer))}")
 
         self.__brain_dead = False
         if self.__brain_dead:
@@ -40,16 +40,9 @@ class ABrainInstance(BrainInstance):
             self.rng = Random(0)
 
     def reset(self):
+        logging.info(f"Reset brain instance {self.id}")
         self.brain.reset()
         self._step = 0
-    #
-    # def __getstate__(self):
-    #     logging.info("Pretending to return a state")
-    #     return {}
-    #
-    # def __setstate__(self, state):
-    #     logging.info("Pretending to load from a state")
-    #     pass
 
     def control(self, dt: float,
                 sensor_state: ModularRobotSensorState,
@@ -58,9 +51,15 @@ class ABrainInstance(BrainInstance):
         if self.__brain_dead:
             return
 
-        # off = len(data.sensors)
-        # self.i_buffer[:off] = [pos for pos in data.sensors]
-        #
+        hinge_sensors = len(self._mapping)
+        hinges = [0] * hinge_sensors
+        for hinge, i in self._mapping:
+            hinges[i] = sensor_state.get_active_hinge_sensor_state(
+                hinge.sensors.active_hinge_sensor).position
+
+        # print(f"[kgd-debug:{self.id}] {hinges=}")
+        self.i_buffer[:hinge_sensors] = hinges
+
         # if self.vision is not None:
         #     if Config.debug_retina_brain > 1:
         #         img = self._debug_retina_image()
@@ -71,7 +70,13 @@ class ABrainInstance(BrainInstance):
 
         self._step += 1
 
+        # inputs_str = "[" + ", ".join(f"{i:.3g}" for i in self.i_buffer) + "]"
+        # logging.warning(f"[kgd-debug:{self.id}] inputs={inputs_str}")
+
         self.brain.__call__(self.i_buffer, self.o_buffer)
+
+        # outputs_str = "[" + ", ".join(f"{o:.3g}" for o in self.o_buffer) + "]"
+        # logging.warning(f"[kgd-debug:{self.id}] outputs={outputs_str}")
 
         if hasattr(self, "rng"):
             self.o_buffer[:] = [self.rng.random() * 2 - 1
@@ -188,7 +193,6 @@ class ABrainFactory(BrainFactory):
             raise ValueError(f"Found duplicates: {pprint.pformat(duplicates)}") from e
 
     def make_instance(self) -> ABrainInstance:
-
         c = ABrainInstance(self._dna,
                            self._inputs, self._outputs,
                            self._mapping)

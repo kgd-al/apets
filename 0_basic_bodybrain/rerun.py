@@ -2,6 +2,7 @@
 
 import logging
 import pickle
+import sys
 
 from evaluator import Evaluator
 from individual import Individual
@@ -13,7 +14,12 @@ def main() -> None:
     """Perform the rerun."""
     setup_logging()
 
-    with open("best.pkl", "rb") as f:
+    try:
+        file = sys.argv[1]
+    except IndexError:
+        file = "best.pkl"
+
+    with open(file, "rb") as f:
         individual: Individual = pickle.load(f)
 
     logging.info(f"Fitness from pickle: {individual.fitness}")

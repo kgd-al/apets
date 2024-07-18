@@ -1,20 +1,15 @@
 """Genotype class."""
 
 from dataclasses import dataclass
-from random import Random
 
-import multineat
-import numpy as np
-from abrain.core.genome import GIDManager
-
-from revolve2.ci_group.genotypes.cppnwin.modular_robot import BrainGenotypeCpg
-from revolve2.ci_group.genotypes.cppnwin.modular_robot.v2 import BodyGenotypeV2
+from abrain import Genome as BodyOrBrainGenome
 from revolve2.modular_robot import ModularRobot
-from abrain import Genome as BodyOrBrainGenome, ANN3D
 from revolve2.modular_robot.body.v2 import BodyV2
-from revolve2.modular_robot.brain import BrainInstance, Brain
+from revolve2.modular_robot.brain import Brain
+
 from body import DefaultBodyPlan
 from brain import develop as develop_brain
+from config import BODY_BRAIN_MUTATION_RATIO
 
 
 @dataclass
@@ -51,10 +46,16 @@ class Genotype:
         )
 
     def mutated(self, data: Data) -> 'Genotype':
-        return Genotype(
-            body=self.body.mutated(data.body),
-            brain=self.brain.mutated(data.brain)
-        )
+        if data.body.rng.random() < BODY_BRAIN_MUTATION_RATIO:
+            return Genotype(
+                body=self.body.mutated(data.body),
+                brain=self.brain.copy()
+            )
+        else:
+            return Genotype(
+                body=self.body.copy(),
+                brain=self.brain.mutated(data.brain)
+            )
 
     @classmethod
     def crossover(cls, lhs, rhs, data: Data) -> 'Genotype':

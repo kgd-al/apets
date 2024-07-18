@@ -3,7 +3,10 @@ import logging
 import pprint
 
 import abrain
+from revolve2.modular_robot import ModularRobot
+from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2, BrickV2
 from revolve2.simulation.simulator import RecordSettings
+from revolve2.simulators.mujoco_simulator.viewers import ViewerType
 
 from genotype import Genotype
 
@@ -17,6 +20,7 @@ from revolve2.modular_robot_simulation import (
 )
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 
+from config import SIMULATION_DURATION
 from brain import ABrainInstance
 
 
@@ -39,7 +43,7 @@ class Evaluator(Eval):
         """
         self._simulator = LocalSimulator(
             headless=headless, num_simulators=num_simulators,
-            # start_paused=(num_simulators == 1),
+            start_paused=(num_simulators == 1 and not headless),
             # viewer_type="native"
         )
         self._terrain = terrains.flat()
@@ -76,11 +80,12 @@ class Evaluator(Eval):
         scene_states = simulate_scenes(
             simulator=self._simulator,
             batch_parameters=make_standard_batch_parameters(
-                simulation_time=5
+                simulation_time=SIMULATION_DURATION
             ),
             scenes=scenes,
             record_settings=(
-                None if len(population) > 1 else
+                None if (len(population) > 1 or
+                         self._simulator._viewer_type is ViewerType.NATIVE) else
                 RecordSettings(
                     video_directory="foo",
                     overwrite=True,
@@ -91,13 +96,24 @@ class Evaluator(Eval):
 
         # Calculate the xy displacements.
         xy_displacements = [
-            fitness_functions.xy_displacement(
-                states[0].get_modular_robot_simulation_state(robot),
-                states[-1].get_modular_robot_simulation_state(robot),
-            )
+            self.fitness(robot, states)
             for robot, states in zip(robots, scene_states)
         ]
         logging.info(f"Finished evaluation of {len(population)} robots."
                      f" Fitnesses:\n{pprint.pformat(xy_displacements)}")
 
         return xy_displacements
+
+    @staticmethod
+    def fitness(robot, states):
+        modules = {
+            t: len(robot.body.find_modules_of_type(t))
+            for t in [BrickV2, ActiveHingeV2]
+        }
+
+        i = int(.8*(len(states)-1))
+        def pos(_i): return states[_i].get_modular_robot_simulation_state(robot)
+        return (
+                .01 * fitness_functions.xy_displacement(pos(0), pos(i-1))
+                + fitness_functions.xy_displacement(pos(i), pos(-1))
+        ) / max(1, modules[BrickV2] + 2 * modules[ActiveHingeV2])

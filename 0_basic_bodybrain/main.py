@@ -2,6 +2,7 @@
 
 import logging
 import pickle
+from pathlib import Path
 from typing import Any
 
 import config
@@ -127,9 +128,11 @@ def find_best_robot(
 def main() -> None:
     """Run the program."""
     # Set up logging.
-    setup_logging(file_name="log.txt")
+    log = Path("log.txt")
+    log.unlink(missing_ok=True)
+    setup_logging(level=logging.WARNING, file_name=str(log))
 
-    seed = 0
+    seed = 2
     data = Genotype.Data(seed)
     rng = make_rng(seed)
 
@@ -147,13 +150,13 @@ def main() -> None:
     )
 
     # Create an initial population as we cant start from nothing.
-    logging.info("Generating initial population.")
+    print("Generating initial population.")
     initial_genotypes = [
         Genotype.random(data) for _ in range(config.POPULATION_SIZE)
     ]
 
     # Evaluate the initial population.
-    logging.info("Evaluating initial population.")
+    print("Evaluating initial population.")
     initial_fitnesses = evaluator.evaluate(initial_genotypes)
 
     # Create a population of individuals, combining genotype with fitness.
@@ -170,10 +173,9 @@ def main() -> None:
     generation_index = 0
 
     # Start the actual optimization process.
-    logging.info("Start optimization process.")
+    print("Start optimization process.")
     while generation_index < config.NUM_GENERATIONS:
-        logging.info(f"Generation {generation_index + 1}"
-                     f" / {config.NUM_GENERATIONS}.")
+        print(f"Generation {generation_index + 1} / {config.NUM_GENERATIONS}.")
 
         """
         In contrast to the previous example we do not explicitly stat the order
@@ -191,16 +193,28 @@ def main() -> None:
         # Find the new best robot
         best_robot = find_best_robot(best_robot, population)
 
-        logging.info(f"Best robot until now: {best_robot.fitness}")
-        logging.info(f"Genotype pickle: {pickle.dumps(best_robot)!r}")
+        print(f"Best robot until now: {best_robot.fitness}")
+        # print(f"Genotype pickle: {pickle.dumps(best_robot)!r}")
+
+        file = "best.pkl"
+        with open(file, "wb") as f:
+            # print(f"Wrote best robot to {file}")
+            pickle.dump(best_robot, f)
 
         # Increase the generation index counter.
         generation_index += 1
 
-    file = "best.pkl"
-    with open(file, "wb") as f:
-        logging.info(f"Wrote best robot to {file}")
-        pickle.dump(best_robot, f)
+    print("Rerunning best robot")
+    logging.warning("\n\nRerunning best robot\n")
+    evaluator = Evaluator(
+        headless=True,
+        num_simulators=1,
+    )
+    fitness = evaluator.evaluate([best_robot.genotype])[0]
+    print(f"> fitness: {fitness}")
+    if fitness != best_robot.fitness:
+        raise RuntimeError(f"Re-evaluation gave different fitness:"
+                           f" {best_robot.fitness} != {fitness}")
 
 
 if __name__ == "__main__":
