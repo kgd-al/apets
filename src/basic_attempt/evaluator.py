@@ -1,6 +1,10 @@
 """Evaluator class."""
 import logging
+import os
 import pprint
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Annotated
 
 import abrain
 from revolve2.modular_robot import ModularRobot
@@ -20,8 +24,17 @@ from revolve2.modular_robot_simulation import (
 )
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 
-from config import SIMULATION_DURATION
+from config import Config, ConfigBase
 from brain import ABrainInstance
+
+
+@dataclass
+class Options(ConfigBase):
+    rerun: Annotated[bool, "Is this a rerun or are we evolving"] = False
+    headless: Annotated[bool, "Do you think you need a GUI?"] = True
+    movie: Annotated[bool, "Do you want a nice video of the robot?"] = False
+    start_paused: Annotated[bool, "Should we let you a good look at the robot first?"] = False
+    file: Annotated[Optional[Path], "If a rerun, path to the investigated robot's genome"] = None
 
 
 class Evaluator(Eval):
@@ -30,20 +43,29 @@ class Evaluator(Eval):
     _simulator: LocalSimulator
     _terrain: Terrain
 
-    def __init__(
-        self,
-        headless: bool,
-        num_simulators: int,
-    ) -> None:
-        """
-        Initialize this object.
+    def __init__(self, config: Config, options: Optional[Options] = None):
+        options = options or Options()
+        if options.rerun:
+            config.num_simulators = 1
+        elif config.num_simulators is None:
+            config.num_simulators = len(os.sched_getaffinity(0))
 
-        :param headless: `headless` parameter for the physics simulator.
-        :param num_simulators: `num_simulators` parameter for the physics simulator.
-        """
+        self._config = config
+        self._options = options
+
+        self._data_folder = config.data_root
+        if options and options.file is not None:
+            self._data_folder = options.file.parent
+
+        self._log = hasattr(config, "logger")
+        if self._log:
+            self._config.logger.info(f"Configuration:\n"
+                                     f"{pprint.pformat(self._config)}\n"
+                                     f"{pprint.pformat(self._options)}")
+
         self._simulator = LocalSimulator(
-            headless=headless, num_simulators=num_simulators,
-            start_paused=(num_simulators == 1 and not headless),
+            headless=options.headless, num_simulators=config.num_simulators,
+            start_paused=options.start_paused,
             # viewer_type="native"
         )
         self._terrain = terrains.flat()
@@ -60,14 +82,16 @@ class Evaluator(Eval):
         :param population: The robots to simulate.
         :returns: Fitnesses of the robots.
         """
-        logging.info(f"Starting evaluation of {len(population)} robots.")
+
+        if self._log:
+            self._config.logger.debug(f"Starting evaluation of {len(population)} robots.")
         robots = [genotype.develop() for genotype in population]
 
         if len(robots) == 1:
             controller: ABrainInstance = robots[0].brain.make_instance()
             brain: abrain.ANN3D = controller.brain
             if not brain.empty():
-                brain.render3D().write_html("brain.html")
+                brain.render3D().write_html(self._config.data_root.joinpath("brain.html"))
 
         # Create the scenes.
         scenes = []
@@ -80,14 +104,14 @@ class Evaluator(Eval):
         scene_states = simulate_scenes(
             simulator=self._simulator,
             batch_parameters=make_standard_batch_parameters(
-                simulation_time=SIMULATION_DURATION
+                simulation_time=self._config.simulation_duration,
             ),
             scenes=scenes,
             record_settings=(
                 None if (len(population) > 1 or
                          self._simulator._viewer_type is ViewerType.NATIVE) else
                 RecordSettings(
-                    video_directory="foo",
+                    video_directory=self._data_folder,
                     overwrite=True,
                     width=512, height=512
                 )
@@ -99,8 +123,9 @@ class Evaluator(Eval):
             self.fitness(robot, states)
             for robot, states in zip(robots, scene_states)
         ]
-        logging.info(f"Finished evaluation of {len(population)} robots."
-                     f" Fitnesses:\n{pprint.pformat(xy_displacements)}")
+        if self._log:
+            self._config.logger.debug(f"Finished evaluation of {len(population)} robots."
+                                      f" Fitnesses:\n{pprint.pformat(xy_displacements)}")
 
         return xy_displacements
 

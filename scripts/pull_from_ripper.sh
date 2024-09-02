@@ -5,13 +5,15 @@ export PYTHONPATH=.
 
 user=kgd
 host=ripper1
-base=$user@$host:data/revolve/
+base=$user@$host:data/apets/
 
-exp='identify_v2_12'
+exp='test'
+[ $# -ge 1 ] && exp=$1
 
 info=""
 # info=--info=progress2
-rsync -avzh $info $base/ remote --prune-empty-dirs -f '+ '$exp'/' -f '+ *-100K/' -f '+ *.json' -f '+ iteration-final.p' -f '+ plots/' -f '+ snapshots' -f '+ *.png' -f '+ [A-Z][A-Z]/' -f '+ *.mp4' -f '+ *.html' -f '+ *.dot' -f '- *'
+rsync -avzh $info $base/ remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' \
+  -f '+ *.pkl' -f '+ *.mp4' -f '- *'
 
 [ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate
 

@@ -24,7 +24,7 @@ class ABrainInstance(BrainInstance):
         self._mapping = mapping
 
         self._step = 0
-        logging.info(f"Created a brain instance for {genome.id()}")
+        logging.debug(f"Created a brain instance for {genome.id()}")
 
         # logging.warning(f"[kgd-debug:{self.id}] brain={pprint.pformat(self.brain.to_json(), width=200)}")
         # logging.warning(f"[kgd-debug:{self.id}] i_buffer={pprint.pformat(list(self.i_buffer))}")
@@ -40,7 +40,7 @@ class ABrainInstance(BrainInstance):
             self.rng = Random(0)
 
     def reset(self):
-        logging.info(f"Reset brain instance {self.id}")
+        logging.debug(f"Reset brain instance {self.id}")
         self.brain.reset()
         self._step = 0
 
@@ -91,7 +91,7 @@ class ABrainInstance(BrainInstance):
 
 class ABrainFactory(BrainFactory):
     def __init__(self, dna: Genome, body: Body, with_labels=False):
-        logging.info(f"Creating a brain factory for {dna.id()}")
+        logging.debug(f"Creating a brain factory for {dna.id()}")
         self._dna = dna
         self._labels = {} if with_labels else None
         self._inputs, self._outputs, self._mapping = [], [], []

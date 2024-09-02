@@ -9,7 +9,7 @@ from revolve2.modular_robot.brain import Brain
 
 from body import DefaultBodyPlan
 from brain import develop as develop_brain
-from config import BODY_BRAIN_MUTATION_RATIO
+from config import Config
 
 
 @dataclass
@@ -27,8 +27,10 @@ class Genotype:
     class Data:
         body: BodyOrBrainGenome.Data
         brain: BodyOrBrainGenome.Data
+        config: Config
 
-        def __init__(self, seed=None):
+        def __init__(self, config, seed=None):
+            self.config = config
             self.body = BodyOrBrainGenome.Data.create_for_generic_cppn(
                 inputs=4, outputs=["bsgm", "id"],
                 seed=seed
@@ -46,7 +48,7 @@ class Genotype:
         )
 
     def mutated(self, data: Data) -> 'Genotype':
-        if data.body.rng.random() < BODY_BRAIN_MUTATION_RATIO:
+        if data.body.rng.random() < data.config.body_brain_mutation_ratio:
             return Genotype(
                 body=self.body.mutated(data.body),
                 brain=self.brain.copy()

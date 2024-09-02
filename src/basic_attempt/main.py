@@ -1,20 +1,26 @@
 """Main script for the example."""
-
+import argparse
 import logging
+import math
 import pickle
+import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import config
+import humanize
 import numpy as np
 import numpy.typing as npt
-from evaluator import Evaluator
+from rich.logging import RichHandler
+from rich.progress import Progress
+
+from config import Config
+from evaluator import Evaluator, Options
 from genotype import Genotype
 from individual import Individual
-
 from revolve2.experimentation.evolution import ModularRobotEvolution
 from revolve2.experimentation.evolution.abstract_elements import Reproducer, Selector
-from revolve2.experimentation.logging import setup_logging
 from revolve2.experimentation.optimization.ea import population_management, selection
 from revolve2.experimentation.rng import make_rng
 
@@ -125,19 +131,64 @@ def find_best_robot(
     )
 
 
+def get_next_tmp_data_root():
+    root = Path("tmp")
+    root.mkdir(exist_ok=True)
+
+    next_id = max([int(str(path)
+                       .split("/")[1]
+                       .split("-")[0][3:]) for path in root.glob("run*/")] + [-1]) + 1
+    return root.joinpath(f"run{next_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+
+
+def setup_logging(folder: Path):
+    log = folder.joinpath("log")
+    log.unlink(missing_ok=True)
+
+    file_handler = logging.FileHandler(log)
+    file_handler.setFormatter(
+        logging.Formatter("[%(asctime)s] [%(levelname)s] [%(module)s] %(message)s"))
+
+    rich_handler = RichHandler()
+    rich_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logging.basicConfig(
+        level=logging.WARNING,
+        handlers=[file_handler, rich_handler],
+    )
+
+    logger = logging.getLogger("main")
+    logger.setLevel(logging.INFO)
+
+    w = 40
+    logger.info("="*w)
+    logger.info(f"{'New log starts here.':^{w}}")
+    logger.info("="*w)
+
+    return logger
+
+
 def main() -> None:
+    start_time = time.perf_counter()
+
     """Run the program."""
     # Set up logging.
-    log = Path("log.txt")
-    log.unlink(missing_ok=True)
-    setup_logging(level=logging.WARNING, file_name=str(log))
+    parser = argparse.ArgumentParser("Main evolution script")
+    Config.populate_argparser(parser)
+    parser.add_argument("--overwrite", action="store_true")
+    config = parser.parse_args(namespace=Config())
 
-    seed = 2
-    data = Genotype.Data(seed)
-    rng = make_rng(seed)
+    if config.data_root is None:
+        config.data_root = get_next_tmp_data_root()
+    config.data_root.mkdir(exist_ok=config.overwrite, parents=True)
 
-    evaluator = Evaluator(headless=True, num_simulators=config.NUM_SIMULATORS)
-    parent_selector = ParentSelector(offspring_size=config.OFFSPRING_SIZE,
+    config.logger = logger = setup_logging(config.data_root)
+
+    data = Genotype.Data(config, config.seed)
+    rng = make_rng(config.seed)
+
+    evaluator = Evaluator(config=config, options=None)
+    parent_selector = ParentSelector(offspring_size=config.population_size,
                                      data=data, rng=rng)
     survivor_selector = SurvivorSelector(rng=rng)
     crossover_reproducer = CrossoverReproducer(data=data)
@@ -150,13 +201,13 @@ def main() -> None:
     )
 
     # Create an initial population as we cant start from nothing.
-    print("Generating initial population.")
+    logger.info("Generating initial population.")
     initial_genotypes = [
-        Genotype.random(data) for _ in range(config.POPULATION_SIZE)
+        Genotype.random(data) for _ in range(config.population_size)
     ]
 
     # Evaluate the initial population.
-    print("Evaluating initial population.")
+    logger.info("Evaluating initial population.")
     initial_fitnesses = evaluator.evaluate(initial_genotypes)
 
     # Create a population of individuals, combining genotype with fitness.
@@ -169,13 +220,17 @@ def main() -> None:
     # Save the best robot
     best_robot = find_best_robot(None, population)
 
-    # Set the current generation to 0.
-    generation_index = 0
+    generation_digits = math.ceil(math.log10(config.generations))
+    current_champion = None
 
     # Start the actual optimization process.
-    print("Start optimization process.")
-    while generation_index < config.NUM_GENERATIONS:
-        print(f"Generation {generation_index + 1} / {config.NUM_GENERATIONS}.")
+    logger.info("Start optimization process.")
+    progress = Progress()
+    progress.start()
+
+    task = progress.add_task("Evolving...", total=config.generations)
+
+    for gen in range(config.generations):
 
         """
         In contrast to the previous example we do not explicitly stat the order
@@ -186,6 +241,7 @@ def main() -> None:
         Not that you are not restricted to the classical ModularRobotEvolution object,
          since you can adjust the step function as you want.
         """
+        logger.debug(f"> Start of generation {gen}")
         population = modular_robot_evolution.step(
             population
         )  # Step the evolution forward.
@@ -193,28 +249,47 @@ def main() -> None:
         # Find the new best robot
         best_robot = find_best_robot(best_robot, population)
 
-        print(f"Best robot until now: {best_robot.fitness}")
+        # print(f"Best robot until now: {best_robot.fitness}")
         # print(f"Genotype pickle: {pickle.dumps(best_robot)!r}")
 
-        file = "best.pkl"
-        with open(file, "wb") as f:
+        current_champion = config.data_root.joinpath(f"champion-{gen:0{generation_digits}}.pkl")
+        with open(current_champion, "wb") as f:
             # print(f"Wrote best robot to {file}")
             pickle.dump(best_robot, f)
 
-        # Increase the generation index counter.
-        generation_index += 1
+        progress.update(task, advance=1, refresh=True,
+                        description=f"[blue][{gen+1}/{config.generations}]"
+                                    f" best fitness: {best_robot.fitness}")
 
-    print("Rerunning best robot")
-    logging.warning("\n\nRerunning best robot\n")
-    evaluator = Evaluator(
-        headless=True,
-        num_simulators=1,
-    )
+        fitnesses = [ind.fitness for ind in population]
+        f_min, f_max = np.quantile(fitnesses, q=[0, 1])
+        f_mean, f_dev = np.average(fitnesses), np.std(fitnesses)
+        logger.info(f"[Gen {gen:{generation_digits}d}]"
+                    f" {f_min:5.3g} <= {f_mean:8.3g}/{f_dev:<8.3g} <= {f_max:8.3g}")
+        logger.debug(f"<   End of generation {gen}")
+
+    progress.refresh()
+    progress.stop()
+
+    champion = config.data_root.joinpath("champion.pkl")
+    champion.symlink_to(current_champion)
+
+    logger.info("Rerunning best robot")
+    evaluator = Evaluator(config=config,
+                          options=Options(
+                              rerun=True,
+                              movie=True,
+                              file=champion,
+                              headless=False
+                          ))
     fitness = evaluator.evaluate([best_robot.genotype])[0]
-    print(f"> fitness: {fitness}")
+    logger.info(f"> fitness: {fitness}")
     if fitness != best_robot.fitness:
         raise RuntimeError(f"Re-evaluation gave different fitness:"
                            f" {best_robot.fitness} != {fitness}")
+
+    duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start_time))
+    logger.info(f"Completed evolution in {duration}")
 
 
 if __name__ == "__main__":

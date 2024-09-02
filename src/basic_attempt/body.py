@@ -391,6 +391,7 @@ class __BodyPlan(abc.ABC):
 
 
 def torso_body() -> BodyV2:
+    print("Forcing torso body")
     body = BodyV2()
     body.core_v2.left_face.bottom = ActiveHingeV2(RightAngles.DEG_0)
     body.core_v2.left_face.bottom.attachment = ActiveHingeV2(RightAngles.DEG_0)
@@ -423,15 +424,15 @@ class DefaultBodyPlan(__BodyPlan):
     @classmethod
     def develop(cls, genotype: Genome) -> BodyV2:
         # return gecko_body()
-        # if genotype.id() == 0:
-        #     return torso_body()
+        # return torso_body()
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"
 
         persistent_rng = Random(0)
 
-        def rng(): return Random(persistent_rng.random())
+        # def rng(): return Random(persistent_rng.random())
+        def rng(): return Random(0)
 
         max_parts = None
         max_depth = 3
