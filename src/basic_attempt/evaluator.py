@@ -1,6 +1,8 @@
 """Evaluator class."""
+import json
 import logging
 import os
+import pickle
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +47,11 @@ class Evaluator(Eval):
 
     def __init__(self, config: Config, options: Optional[Options] = None):
         options = options or Options()
+        # if options.rerun:
+        #     options.rerun = False
+        #     config.num_simulators = None
+        #     options.headless = True
+
         if options.rerun:
             config.num_simulators = 1
         elif config.num_simulators is None:
@@ -85,7 +92,7 @@ class Evaluator(Eval):
 
         if self._log:
             self._config.logger.debug(f"Starting evaluation of {len(population)} robots.")
-        robots = [genotype.develop() for genotype in population]
+        robots = [genotype.develop(self._config) for genotype in population]
 
         if len(robots) == 1:
             controller: ABrainInstance = robots[0].brain.make_instance()
@@ -127,7 +134,7 @@ class Evaluator(Eval):
             self._config.logger.debug(f"Finished evaluation of {len(population)} robots."
                                       f" Fitnesses:\n{pprint.pformat(xy_displacements)}")
 
-        return xy_displacements
+        return xy_displacements if len(robots) > 1 else xy_displacements[0]
 
     @staticmethod
     def fitness(robot, states):

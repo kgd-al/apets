@@ -81,3 +81,6 @@ class Config(ConfigBase):
     population_size: Annotated[int, "Population size (duh)"] = 10
     generations: Annotated[int, "Number of generations (double duh)"] = 10
     data_root: Annotated[Optional[Path], "Where to store the generated data"] = None
+
+    cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
+    cppn_body_outputs: Annotated[str, "Outputs computed by the body's CPPN"] = "b,a"

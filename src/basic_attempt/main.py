@@ -1,5 +1,6 @@
 """Main script for the example."""
 import argparse
+import json
 import logging
 import math
 import pickle
@@ -168,15 +169,8 @@ def setup_logging(folder: Path):
     return logger
 
 
-def main() -> None:
+def main(config: Config) -> None:
     start_time = time.perf_counter()
-
-    """Run the program."""
-    # Set up logging.
-    parser = argparse.ArgumentParser("Main evolution script")
-    Config.populate_argparser(parser)
-    parser.add_argument("--overwrite", action="store_true")
-    config = parser.parse_args(namespace=Config())
 
     if config.data_root is None:
         config.data_root = get_next_tmp_data_root()
@@ -249,7 +243,7 @@ def main() -> None:
         # Find the new best robot
         best_robot = find_best_robot(best_robot, population)
 
-        # print(f"Best robot until now: {best_robot.fitness}")
+        # print(f"Best robot until now: [{best_robot.genotype.body.id()}] {best_robot.fitness}")
         # print(f"Genotype pickle: {pickle.dumps(best_robot)!r}")
 
         current_champion = config.data_root.joinpath(f"champion-{gen:0{generation_digits}}.pkl")
@@ -274,6 +268,37 @@ def main() -> None:
     champion = config.data_root.joinpath("champion.pkl")
     champion.symlink_to(current_champion)
 
+
+
+
+
+
+
+
+
+
+
+    config.num_simulators = 1
+    evaluator = Evaluator(config=config,
+                          options=Options(
+                              rerun=False,
+                              movie=False,
+                              file=champion,
+                              headless=True
+                          ))
+    fitness = evaluator.evaluate([best_robot.genotype])
+    logger.info(f"> fitness: {fitness}")
+    config.num_simulators = 2
+    evaluator = Evaluator(config=config,
+                          options=Options(
+                              rerun=False,
+                              movie=False,
+                              file=champion,
+                              headless=True
+                          ))
+    fitness = evaluator.evaluate([best_robot.genotype])
+    logger.info(f"> fitness: {fitness}")
+
     logger.info("Rerunning best robot")
     evaluator = Evaluator(config=config,
                           options=Options(
@@ -282,7 +307,7 @@ def main() -> None:
                               file=champion,
                               headless=False
                           ))
-    fitness = evaluator.evaluate([best_robot.genotype])[0]
+    fitness = evaluator.evaluate([best_robot.genotype])
     logger.info(f"> fitness: {fitness}")
     if fitness != best_robot.fitness:
         raise RuntimeError(f"Re-evaluation gave different fitness:"
@@ -293,4 +318,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser("Main evolution script")
+    Config.populate_argparser(parser)
+    parser.add_argument("--overwrite", action="store_true")
+    config = parser.parse_args(namespace=Config())
+
+    main(config)

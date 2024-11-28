@@ -1,5 +1,6 @@
 """Genotype class."""
-
+import json
+import pprint
 from dataclasses import dataclass
 
 from abrain import Genome as BodyOrBrainGenome
@@ -65,19 +66,27 @@ class Genotype:
         brain = BodyOrBrainGenome.crossover(lhs.brain, rhs.brain, data.brain)
         return Genotype(body, brain)
 
-    def develop(self) -> ModularRobot:
+    def develop(self, config: Config) -> ModularRobot:
         """
         Develop the genotype into a modular robot.
 
         :returns: The created robot.
         """
 
-        body = self.develop_body()
+        body = self.develop_body(config)
         brain = self.develop_brain(body=body)
         return ModularRobot(body=body, brain=brain)
 
-    def develop_body(self) -> BodyV2:
-        return DefaultBodyPlan.develop(self.body)
+    def develop_body(self, config: Config) -> BodyV2:
+        return DefaultBodyPlan.develop(self.body,
+                                       inputs=config.cppn_body_inputs,
+                                       outputs=config.cppn_body_outputs)
 
     def develop_brain(self, body: BodyV2) -> Brain:
         return develop_brain(self.brain, body)
+
+    def print_json(self):
+        pprint.pprint(dict(
+            body=self.body.to_json(),
+            brain=self.brain.to_json()
+        ))
