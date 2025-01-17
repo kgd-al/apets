@@ -1,12 +1,8 @@
 """Main script for the example."""
-import pprint
-
-from random import Random
 
 import argparse
 import logging
 import math
-import pickle
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,18 +11,15 @@ from typing import Any
 import humanize
 import numpy as np
 import numpy.typing as npt
+from revolve2.experimentation.evolution.abstract_elements import Reproducer, Selector
+from revolve2.experimentation.optimization.ea import population_management, selection
 from rich.logging import RichHandler
-from rich.progress import Progress
 
-from abrain.neat.evolver import NEATConfig, NEATEvolver
+from abrain.neat.evolver import NEATConfig, NEATEvolver, logger as evolver_logger
 from config import Config
 from evaluator import Evaluator, Options
 from genotype import Genotype
 from individual import Individual
-from revolve2.experimentation.evolution import ModularRobotEvolution
-from revolve2.experimentation.evolution.abstract_elements import Reproducer, Selector
-from revolve2.experimentation.optimization.ea import population_management, selection
-from revolve2.experimentation.rng import make_rng
 
 
 class ParentSelector(Selector):
@@ -161,6 +154,7 @@ def setup_logging(folder: Path):
         handlers=[file_handler, rich_handler],
     )
 
+    evolver_logger.setLevel(logging.INFO)
     logger = logging.getLogger("main")
     logger.setLevel(logging.INFO)
 
@@ -347,6 +341,8 @@ def main(config: Config) -> None:
     )
 
     Evaluator.initialize(config=config, options=None)
+    config.neat.threads = config.threads
+
     evolver = NEATEvolver(config.neat,
                           evaluator=Evaluator.evaluate,
                           genome_class=Genotype, genome_data=dict(data=data))
@@ -356,56 +352,34 @@ def main(config: Config) -> None:
         current_champion = None
 
         best_robot = evolver.champion
-        print(best_robot)
         for i in range(config.generations):
             evolver.step()
 
             best_robot = evolver.champion
             current_champion = config.data_root.joinpath(f"champion-{i:0{generation_digits}}.pkl")
-            with open(current_champion, "wt") as f:
-                f.write(best_robot.genome.to_json())
+            best_robot.genome.to_file(current_champion)
 
     evolver.generate_plots(ext="pdf", options=dict())
 
     champion = config.data_root.joinpath("champion.pkl")
     champion.symlink_to(current_champion)
 
-    #
-    # config.num_simulators = 1
-    # evaluator = Evaluator(config=config,
-    #                       options=Options(
-    #                           rerun=False,
-    #                           movie=False,
-    #                           file=champion,
-    #                           headless=True
-    #                       ))
-    # fitness = evaluator.evaluate([best_robot.genotype])
-    # logger.info(f"> fitness: {fitness}")
-    # config.num_simulators = 2
-    # evaluator = Evaluator(config=config,
-    #                       options=Options(
-    #                           rerun=False,
-    #                           movie=False,
-    #                           file=champion,
-    #                           headless=True
-    #                       ))
-    # fitness = evaluator.evaluate([best_robot.genotype])
-    # logger.info(f"> fitness: {fitness}")
-    #
-    # logger.info("Rerunning best robot")
-    # evaluator = Evaluator(config=config,
-    #                       options=Options(
-    #                           rerun=True,
-    #                           movie=True,
-    #                           file=champion,
-    #                           headless=False
-    #                       ))
-    # fitness = evaluator.evaluate([best_robot.genotype])
-    # logger.info(f"> fitness: {fitness}")
-    # if fitness != best_robot.fitness:
-    #     raise RuntimeError(f"Re-evaluation gave different fitness:"
-    #                        f" {best_robot.fitness} != {fitness}")
-    #
+    config.num_simulators = 1
+    Evaluator.initialize(
+        config=config, options=Options(
+            rerun=False,
+            movie=False,
+            file=champion,
+            headless=True
+        ), verbose=False)
+    fitness = Evaluator.evaluate(best_robot.genome)
+
+    if fitness != best_robot.fitness:
+        raise RuntimeError(f"Re-evaluation gave different fitness:"
+                           f" {best_robot.fitness} != {fitness}")
+    else:
+        config.logger.info(f"Optimal fitness: {fitness}")
+
     duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start_time))
     config.logger.info(f"Completed evolution in {duration}")
 

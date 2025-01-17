@@ -1,12 +1,19 @@
 """Evaluator class."""
 import logging
-
 import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar
 
+from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
+from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
+from revolve2.modular_robot_simulation import (
+    ModularRobotScene,
+    simulate_scenes,
+)
+from revolve2.simulation.simulator import RecordSettings
+from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.standards import fitness_functions, terrains
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
 
@@ -14,16 +21,6 @@ import abrain
 from brain import ABrainInstance
 from config import Config, ConfigBase
 from genotype import Genotype
-from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
-from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
-from revolve2.modular_robot_simulation import (
-    ModularRobotScene,
-    Terrain,
-    simulate_scenes,
-)
-from revolve2.simulation.simulator import RecordSettings
-from revolve2.simulators.mujoco_simulator import LocalSimulator
-from revolve2.simulators.mujoco_simulator.viewers import ViewerType
 
 
 @dataclass
@@ -44,7 +41,8 @@ class Evaluator(Eval):
     _log: ClassVar[logging.Logger] = None
 
     @classmethod
-    def initialize(cls, config: Config, options: Optional[Options] = None):
+    def initialize(cls, config: Config, options: Optional[Options] = None,
+                   verbose = True):
         cls.config = config
 
         options = options or Options()
@@ -64,7 +62,7 @@ class Evaluator(Eval):
             cls._data_folder = options.file.parent
 
         cls._log = getattr(config, "logger", None)
-        if cls._log:
+        if cls._log and verbose:
             cls._log.info(f"Configuration:\n"
                           f"{pprint.pformat(cls.config)}\n"
                           f"{pprint.pformat(cls.options)}")

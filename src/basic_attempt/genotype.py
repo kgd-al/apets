@@ -91,8 +91,15 @@ class Genotype:
         return (.5 * BodyOrBrainGenome.distance(lhs.body, rhs.body)
                 + .5 * BodyOrBrainGenome.distance(lhs.brain, rhs.brain))
 
-    def print_json(self):
-        pprint.pprint(dict(
+    def to_json(self):
+        return dict(
             body=self.body.to_json(),
             brain=self.brain.to_json()
-        ))
+        )
+
+    def to_file(self, path):
+        with open(path, "wt") as f:
+            json.dump(self.to_json(), f)
+
+    def print_json(self):
+        pprint.pprint(self.to_json())
