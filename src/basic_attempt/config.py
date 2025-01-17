@@ -6,6 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import get_args, get_origin, Union, Annotated, Optional
 
+from abrain.neat.evolver import NEATConfig
+
 
 @dataclass
 class ConfigBase(ABC):
@@ -71,16 +73,24 @@ class ConfigBase(ABC):
 
 @dataclass
 class Config(ConfigBase):
+    threads: Annotated[int, "Number of concurrent evaluations"] = None
+    overwrite: Annotated[bool, "Do we allow running in an existing folder?"] = False
+
     simulation_duration: Annotated[float, "Number of seconds per simulation"] = 5
 
     body_brain_mutation_ratio: (
         Annotated)[float, "Probability of mutating the body, otherwise brain"] = 0.1
 
     seed: Annotated[Optional[int], "RNG seed (set from time if none)"] = None
-    num_simulators: Annotated[Optional[int], "How much parallelism?"] = None
+
     population_size: Annotated[int, "Population size (duh)"] = 10
     generations: Annotated[int, "Number of generations (double duh)"] = 10
+    species: Annotated[int, "Target number of species (for NEAT diversity)"] = 8
+    distance_threshold: Annotated[float, "Initial genetic distance to differentiate between species"] = .1
+
     data_root: Annotated[Optional[Path], "Where to store the generated data"] = None
 
     cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
     cppn_body_outputs: Annotated[str, "Outputs computed by the body's CPPN"] = "b,a"
+
+    neat: NEATConfig = NEATConfig()

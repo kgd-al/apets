@@ -1,4 +1,6 @@
 """Genotype class."""
+from copy import deepcopy
+
 import json
 import pprint
 from dataclasses import dataclass
@@ -48,17 +50,16 @@ class Genotype:
             brain=BodyOrBrainGenome.random(data.brain)
         )
 
-    def mutated(self, data: Data) -> 'Genotype':
+    def mutate(self, data: Data) -> None:
         if data.body.rng.random() < data.config.body_brain_mutation_ratio:
-            return Genotype(
-                body=self.body.mutated(data.body),
-                brain=self.brain.copy()
-            )
+            self.body.mutate(data.body)
         else:
-            return Genotype(
-                body=self.body.copy(),
-                brain=self.brain.mutated(data.brain)
-            )
+            self.brain.mutate(data.brain)
+
+    def mutated(self, data: Data) -> 'Genotype':
+        clone = deepcopy(self)
+        clone.mutate(data)
+        return clone
 
     @classmethod
     def crossover(cls, lhs, rhs, data: Data) -> 'Genotype':
@@ -84,6 +85,11 @@ class Genotype:
 
     def develop_brain(self, body: BodyV2) -> Brain:
         return develop_brain(self.brain, body)
+
+    @classmethod
+    def distance(cls, lhs: 'Genotype', rhs: 'Genotype') -> float:
+        return (.5 * BodyOrBrainGenome.distance(lhs.body, rhs.body)
+                + .5 * BodyOrBrainGenome.distance(lhs.brain, rhs.brain))
 
     def print_json(self):
         pprint.pprint(dict(
