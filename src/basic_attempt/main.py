@@ -356,19 +356,21 @@ def main(config: Config) -> None:
             evolver.step()
 
             best_robot = evolver.champion
-            current_champion = config.data_root.joinpath(f"champion-{i:0{generation_digits}}.pkl")
-            best_robot.genome.to_file(current_champion)
+            current_champion = config.data_root.joinpath(
+                f"champion-{i:0{generation_digits}}.json")
+            best_robot.genome.to_file(current_champion,
+                                      dict(fitness=best_robot.fitness,))
 
     evolver.generate_plots(ext="pdf", options=dict())
 
-    champion = config.data_root.joinpath("champion.pkl")
-    champion.symlink_to(current_champion)
+    champion = config.data_root.joinpath("champion.json")
+    champion.symlink_to(current_champion.name)
 
     config.num_simulators = 1
     Evaluator.initialize(
         config=config, options=Options(
-            rerun=False,
-            movie=False,
+            rerun=True,
+            movie=True,
             file=champion,
             headless=True
         ), verbose=False)

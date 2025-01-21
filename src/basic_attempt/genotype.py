@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import pprint
 from dataclasses import dataclass
+from typing import Tuple
 
 from abrain import Genome as BodyOrBrainGenome
 from revolve2.modular_robot import ModularRobot
@@ -36,12 +37,17 @@ class Genotype:
             self.config = config
             self.body = BodyOrBrainGenome.Data.create_for_generic_cppn(
                 inputs=4, outputs=["bsgm", "id"],
-                seed=seed
+                seed=seed,
+                with_lineage=False
             )
             self.brain = BodyOrBrainGenome.Data.create_for_eshn_cppn(
                 dimension=3,
-                seed=seed
+                seed=seed,
+                with_lineage=True
             )
+
+    @property
+    def id(self): return self.brain.id
 
     @classmethod
     def random(cls, data: Data) -> 'Genotype':
@@ -59,12 +65,14 @@ class Genotype:
     def mutated(self, data: Data) -> 'Genotype':
         clone = deepcopy(self)
         clone.mutate(data)
+        clone.brain.update_lineage(data.body, [self.brain])
         return clone
 
     @classmethod
     def crossover(cls, lhs, rhs, data: Data) -> 'Genotype':
         body = BodyOrBrainGenome.crossover(lhs.body, rhs.body, data.body)
         brain = BodyOrBrainGenome.crossover(lhs.brain, rhs.brain, data.brain)
+        brain.update_lineage(data.brain, [lhs.brain, rhs.brain])
         return Genotype(body, brain)
 
     def develop(self, config: Config) -> ModularRobot:
@@ -97,9 +105,23 @@ class Genotype:
             brain=self.brain.to_json()
         )
 
-    def to_file(self, path):
+    def to_file(self, path, data: dict = None):
         with open(path, "wt") as f:
-            json.dump(self.to_json(), f)
+            dct = self.to_json()
+            if data is not None:
+                dct.update(data)
+            json.dump(dct, f)
+
+    @classmethod
+    def from_file(cls, path) -> Tuple['Genotype', dict]:
+        with open(path, "rt") as f:
+            j = json.load(f)
+            genome = Genotype(
+                BodyOrBrainGenome.from_json(j.pop("body")),
+                BodyOrBrainGenome.from_json(j.pop("brain")),
+            )
+
+            return genome, j
 
     def print_json(self):
         pprint.pprint(self.to_json())

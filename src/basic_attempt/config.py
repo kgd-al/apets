@@ -76,7 +76,7 @@ class Config(ConfigBase):
     threads: Annotated[int, "Number of concurrent evaluations"] = None
     overwrite: Annotated[bool, "Do we allow running in an existing folder?"] = False
 
-    simulation_duration: Annotated[float, "Number of seconds per simulation"] = 5
+    simulation_duration: Annotated[int, "Number of seconds per simulation"] = 5
 
     body_brain_mutation_ratio: (
         Annotated)[float, "Probability of mutating the body, otherwise brain"] = 0.1

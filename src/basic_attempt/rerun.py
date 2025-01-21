@@ -5,6 +5,7 @@ import pickle
 from pathlib import Path
 
 from basic_attempt.config import Config
+from basic_attempt.genotype import Genotype
 from evaluator import Evaluator, Options
 from individual import Individual
 from revolve2.experimentation.logging import setup_logging
@@ -25,18 +26,24 @@ def main() -> None:
     parser.parse_args(namespace=config)
     print(config)
 
-    file = config.file or Path("best.pkl")
+    file = config.file or Path("tmp/last/champion.json")
     config.data_root = file.parent
 
-    with open(file, "rb") as f:
-        individual: Individual = pickle.load(f)
+    genome, data = Genotype.from_file(file)
+    fitness = data["fitness"]
 
-    logging.info(f"Fitness from pickle: {individual.fitness}")
+    logging.info(f"Fitness from file: {fitness}")
 
-    evaluator = Evaluator(config, config)
+    Evaluator.initialize(
+        config=config, options=Options(
+            rerun=True,
+            movie=True,
+            file=None,
+            headless=True
+        ), verbose=False)
 
     try:
-        fitness = evaluator.evaluate([individual.genotype])[0]
+        fitness = Evaluator.evaluate(genome)
         logging.info(f"Rerun fitness: {fitness}")
 
     except Exception as e:

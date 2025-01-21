@@ -4,6 +4,7 @@ import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
+from random import Random
 from typing import Optional, Annotated, ClassVar
 
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
@@ -68,7 +69,7 @@ class Evaluator(Eval):
                           f"{pprint.pformat(cls.options)}")
 
     @classmethod
-    def evaluate(cls, genotype: Genotype) -> list[float]:
+    def evaluate(cls, genotype: Genotype) -> float:
         """
         Evaluate a *single* robot.
 
@@ -79,47 +80,60 @@ class Evaluator(Eval):
         """
 
         config, options = cls.config, cls.options
-        simulator = LocalSimulator(
-            headless=options.headless,
-            num_simulators=1,
-            start_paused=options.start_paused,
-            # viewer_type="native"
-        )
-        terrain = terrains.flat()
 
-        robot = genotype.develop(config)
+        try:
+            simulator = LocalSimulator(
+                headless=options.headless,
+                num_simulators=1,
+                start_paused=options.start_paused,
+                # viewer_type="native"
+            )
+            terrain = terrains.flat()
 
-        controller: ABrainInstance = robot.brain.make_instance()
-        brain: abrain.ANN3D = controller.brain
-        if not brain.empty():
-            brain.render3D().write_html(config.data_root.joinpath("brain.html"))
+            robot = genotype.develop(config)
 
-        # Create the scenes.
-        scene = ModularRobotScene(terrain=terrain)
-        scene.add_robot(robot)
+            controller: ABrainInstance = robot.brain.make_instance()
+            brain: abrain.ANN3D = controller.brain
+            if not brain.empty():
+                brain.render3D().write_html(config.data_root.joinpath("brain.html"))
 
-        # Simulate all scenes.
-        scene_states = simulate_scenes(
-            simulator=simulator,
-            batch_parameters=make_standard_batch_parameters(
-                simulation_time=config.simulation_duration,
-            ),
-            scenes=[scene],
-            record_settings=(
-                None
-                if not options.rerun else
-                RecordSettings(
-                    video_directory=config.data_root,
-                    overwrite=True,
-                    width=512, height=512
+            # Create the scenes.
+            scene = ModularRobotScene(terrain=terrain)
+            scene.add_robot(robot)
+
+            # Simulate all scenes.
+            scene_states = simulate_scenes(
+                simulator=simulator,
+                batch_parameters=make_standard_batch_parameters(
+                    simulation_time=config.simulation_duration,
+                ),
+                scenes=[scene],
+                record_settings=(
+                    None
+                    if not options.rerun else
+                    RecordSettings(
+                        video_directory=str(config.data_root),
+                        overwrite=True,
+                        width=512, height=512
+                    )
                 )
             )
-        )
 
-        # Calculate the xy displacements.
-        xy_displacement = cls.fitness(robot, scene_states[0])
+            # Calculate the xy displacements.
+            xy_displacement = cls.fitness(robot, scene_states[0])
 
-        return xy_displacement
+            return xy_displacement
+
+        except Exception as e:
+            f = config.data_root.joinpath("failures")
+            f.mkdir(parents=True, exist_ok=True)
+            f = f.joinpath(f"{genotype.id()}.json")
+            cls._log.error(
+                f"Evaluation failed: {e.__class__.__name__}({e})."
+                f" Guilty genotype written to {f}.")
+            cls._log.exception("Stack trace:")
+
+            return float("-inf")
 
     @staticmethod
     def fitness(robot, states):
