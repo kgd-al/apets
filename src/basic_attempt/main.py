@@ -3,6 +3,7 @@
 import argparse
 import logging
 import math
+import signal
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -317,35 +318,41 @@ def setup_logging(folder: Path):
 def main(config: Config) -> None:
     start_time = time.perf_counter()
 
-    if config.data_root is None:
-        config.data_root = get_next_tmp_data_root()
-    config.data_root.mkdir(exist_ok=config.overwrite, parents=True)
-    run_symlink = config.data_root.parent.joinpath("last")
-    if run_symlink.is_symlink() or run_symlink.exists():
-        run_symlink.unlink()
+    if config.resume is None:
+        if config.data_root is None:
+            config.data_root = get_next_tmp_data_root()
+        config.data_root.mkdir(exist_ok=config.overwrite, parents=True)
+        run_symlink = config.data_root.parent.joinpath("last")
+        if run_symlink.is_symlink() or run_symlink.exists():
+            run_symlink.unlink()
 
-    run_symlink.symlink_to(config.data_root.absolute(), target_is_directory=True)
+        run_symlink.symlink_to(config.data_root.absolute(), target_is_directory=True)
 
-    config.logger = setup_logging(config.data_root)
+        config.logger = setup_logging(config.data_root)
 
-    data = Genotype.Data(config, config.seed)
-    config.neat = NEATConfig(
-        seed=config.seed,
-        threads=config.threads,
-        log_dir=config.data_root,
-        log_level=10,
-        population_size=config.population_size,
-        species_count=config.species,
-        initial_distance_threshold=config.distance_threshold,
-        overwrite=True,
-    )
+        data = Genotype.Data(config, config.seed)
+        neat_config = NEATConfig(
+            seed=config.seed,
+            threads=config.threads,
+            log_dir=config.data_root,
+            log_level=10,
+            population_size=config.population_size,
+            species_count=config.species,
+            initial_distance_threshold=config.distance_threshold,
+            overwrite=True,
+        )
 
-    Evaluator.initialize(config=config, options=None)
-    config.neat.threads = config.threads
+        Evaluator.initialize(config=config, options=None)
+        neat_config.threads = config.threads
 
-    evolver = NEATEvolver(config.neat,
-                          evaluator=Evaluator.evaluate,
-                          genome_class=Genotype, genome_data=dict(data=data))
+        evolver = NEATEvolver(neat_config,
+                              evaluator=Evaluator.evaluate,
+                              genome_class=Genotype, genome_data=dict(data=data))
+
+    else:
+        evolver = NEATEvolver.restore(config.resume)
+
+        exit(42)
 
     with evolver:
         generation_digits = math.ceil(math.log10(config.generations))

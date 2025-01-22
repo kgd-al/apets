@@ -73,6 +73,7 @@ class ConfigBase(ABC):
 
 @dataclass
 class Config(ConfigBase):
+    resume: Annotated[Path, "Resume evolution from provided checkpoint archive"] = None
     threads: Annotated[int, "Number of concurrent evaluations"] = None
     overwrite: Annotated[bool, "Do we allow running in an existing folder?"] = False
 
@@ -93,4 +94,3 @@ class Config(ConfigBase):
     cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
     cppn_body_outputs: Annotated[str, "Outputs computed by the body's CPPN"] = "b,a"
 
-    neat: NEATConfig = NEATConfig()

@@ -5,7 +5,7 @@ import pprint
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-from typing import Optional, Annotated, ClassVar
+from typing import Optional, Annotated, ClassVar, Tuple
 
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
@@ -69,7 +69,7 @@ class Evaluator(Eval):
                           f"{pprint.pformat(cls.options)}")
 
     @classmethod
-    def evaluate(cls, genotype: Genotype) -> float:
+    def evaluate(cls, genotype: Genotype) -> Tuple[float, Optional[dict]]:
         """
         Evaluate a *single* robot.
 
@@ -122,18 +122,22 @@ class Evaluator(Eval):
             # Calculate the xy displacements.
             xy_displacement = cls.fitness(robot, scene_states[0])
 
-            return xy_displacement
+            return xy_displacement, None
 
         except Exception as e:
             f = config.data_root.joinpath("failures")
             f.mkdir(parents=True, exist_ok=True)
             f = f.joinpath(f"{genotype.id()}.json")
-            cls._log.error(
-                f"Evaluation failed: {e.__class__.__name__}({e})."
-                f" Guilty genotype written to {f}.")
-            cls._log.exception("Stack trace:")
+            if not options.rerun:
+                cls._log.error(
+                    f"Evaluation failed: {e.__class__.__name__}({e})."
+                    f" Guilty genotype written to {f}.")
+                cls._log.exception("Stack trace:")
 
-            return float("-inf")
+            else:
+                raise RuntimeError("Evaluation failed") from e
+
+            return float("-inf"), None
 
     @staticmethod
     def fitness(robot, states):
