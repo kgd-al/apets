@@ -7,7 +7,7 @@ import signal
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import humanize
 import numpy as np
@@ -16,9 +16,10 @@ from revolve2.experimentation.evolution.abstract_elements import Reproducer, Sel
 from revolve2.experimentation.optimization.ea import population_management, selection
 from rich.logging import RichHandler
 
-from abrain.neat.evolver import NEATConfig, NEATEvolver, logger as evolver_logger
+from abrain.neat.evolver import (Config as NEATConfig, Evolver,
+                                 logger as evolver_logger, EvaluationResult)
 from config import Config
-from evaluator import Evaluator, Options
+from evaluator import Evaluator, Options, performance_compare
 from genotype import Genotype
 from individual import Individual
 
@@ -139,7 +140,7 @@ def get_next_tmp_data_root():
     return root.joinpath(f"run{next_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
 
 
-def setup_logging(folder: Path):
+def setup_logging(folder: Path, header: Optional[str] = None):
     log = folder.joinpath("log")
     log.unlink(missing_ok=True)
 
@@ -162,7 +163,12 @@ def setup_logging(folder: Path):
     w = 40
     logger.info("="*w)
     logger.info(f"{'New log starts here.':^{w}}")
+    if header is not None:
+        logger.info(f"{header:^{w}}")
     logger.info("="*w)
+
+    print(log)
+    assert log.exists()
 
     return logger
 
@@ -330,6 +336,8 @@ def main(config: Config) -> None:
 
         config.logger = setup_logging(config.data_root)
 
+        Evaluator.initialize(config=config, options=None)
+
         data = Genotype.Data(config, config.seed)
         neat_config = NEATConfig(
             seed=config.seed,
@@ -342,25 +350,32 @@ def main(config: Config) -> None:
             overwrite=True,
         )
 
-        Evaluator.initialize(config=config, options=None)
-        neat_config.threads = config.threads
-
-        evolver = NEATEvolver(neat_config,
-                              evaluator=Evaluator.evaluate,
-                              genome_class=Genotype, genome_data=dict(data=data))
+        evolver = Evolver(neat_config,
+                          evaluator=Evaluator.evaluate,
+                          genotype_interface=Genotype.neat_interface(data),
+                          global_config=config)
 
     else:
-        evolver = NEATEvolver.restore(config.resume)
+        evolver = Evolver.restore(config.resume, evaluator=Evaluator.evaluate)
 
-        exit(42)
+        config = evolver.global_config
+        Evaluator.initialize(config=config, options=None)
+
+        config.logger = setup_logging(config.data_root,
+                                      f"Resuming run from generation "
+                                      f"{evolver.generation} up to {config.generations}.")
 
     with evolver:
         generation_digits = math.ceil(math.log10(config.generations))
         current_champion = None
 
         best_robot = evolver.champion
-        for i in range(config.generations):
+        for i in range(evolver.generation, config.generations):
             evolver.step()
+
+            if i == 5 and config.resume is None:
+                config.logger.error("[Test] Forcing premature end")
+                exit(42)
 
             best_robot = evolver.champion
             current_champion = config.data_root.joinpath(
@@ -370,32 +385,37 @@ def main(config: Config) -> None:
 
     evolver.generate_plots(ext="pdf", options=dict())
 
-    champion = config.data_root.joinpath("champion.json")
-    champion.symlink_to(current_champion.name)
+    if current_champion is not None:
+        champion = config.data_root.joinpath("champion.json")
+        champion.symlink_to(current_champion.name)
 
-    config.num_simulators = 1
-    Evaluator.initialize(
-        config=config, options=Options(
-            rerun=True,
-            movie=True,
-            file=champion,
-            headless=True
-        ), verbose=False)
-    fitness = Evaluator.evaluate(best_robot.genome)
+        config.num_simulators = 1
+        Evaluator.initialize(
+            config=config, options=Options(
+                rerun=True,
+                movie=True,
+                file=champion,
+                headless=True
+            ), verbose=False)
+        reeval_results = Evaluator.evaluate(best_robot.genome)
 
-    if fitness != best_robot.fitness:
-        raise RuntimeError(f"Re-evaluation gave different fitness:"
-                           f" {best_robot.fitness} != {fitness}")
-    else:
-        config.logger.info(f"Optimal fitness: {fitness}")
+        if performance_compare(reeval_results,
+                               EvaluationResult(best_robot.fitness, best_robot.stats),
+                               verbosity=0):
+            config.logger.error(f"Re-evaluation gave different results")
+        else:
+            config.logger.info(f"Optimal fitness: {reeval_results.fitness}")
 
     duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start_time))
     config.logger.info(f"Completed evolution in {duration}")
+
+    evolver.dump("foo.json")
+    evolver_restored = Evolver.restore("foo.json", Evaluator.evaluate)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Main evolution script")
     Config.populate_argparser(parser)
-    config = parser.parse_args(namespace=Config())
+    parsed_config = parser.parse_args(namespace=Config())
 
-    main(config)
+    main(parsed_config)

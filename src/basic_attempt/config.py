@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import get_args, get_origin, Union, Annotated, Optional
 
-from abrain.neat.evolver import NEATConfig
+from abrain.neat.evolver import Config
 
 
 @dataclass

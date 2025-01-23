@@ -4,9 +4,10 @@ import logging
 import pickle
 from pathlib import Path
 
+from abrain.neat.evolver import EvaluationResult
 from basic_attempt.config import Config
 from basic_attempt.genotype import Genotype
-from evaluator import Evaluator, Options
+from evaluator import Evaluator, Options, performance_compare
 from individual import Individual
 from revolve2.experimentation.logging import setup_logging
 
@@ -30,7 +31,7 @@ def main() -> None:
     config.data_root = file.parent
 
     genome, data = Genotype.from_file(file)
-    fitness = data["fitness"]
+    fitness, stats = data["fitness"], data.get("stats", {})
 
     logging.info(f"Fitness from file: {fitness}")
 
@@ -43,9 +44,12 @@ def main() -> None:
         ), verbose=False)
 
     try:
-        fitness = Evaluator.evaluate(genome)
-        logging.info(f"Rerun fitness: {fitness}")
-
+        result = Evaluator.evaluate(genome)
+        # logging.info(f"Rerun fitness: {refitness}")
+        if performance_compare(result,
+                               EvaluationResult(fitness, stats),
+                               verbosity=2):
+            logging.error(f"Re-evaluation gave different results")
     except Exception as e:
         print("Stuff did not work:", e)
         # raise e

@@ -11,6 +11,7 @@ from revolve2.modular_robot import ModularRobot
 from revolve2.modular_robot.body.v2 import BodyV2
 from revolve2.modular_robot.brain import Brain
 
+from abrain.neat.evolver import Evolver
 from body import DefaultBodyPlan
 from brain import develop as develop_brain
 from config import Config
@@ -49,8 +50,8 @@ class Genotype:
     @property
     def id(self): return self.brain.id
 
-    @classmethod
-    def random(cls, data: Data) -> 'Genotype':
+    @staticmethod
+    def random(data: Data) -> 'Genotype':
         return Genotype(
             body=BodyOrBrainGenome.random(data.body),
             brain=BodyOrBrainGenome.random(data.brain)
@@ -68,8 +69,8 @@ class Genotype:
         clone.brain.update_lineage(data.body, [self.brain])
         return clone
 
-    @classmethod
-    def crossover(cls, lhs, rhs, data: Data) -> 'Genotype':
+    @staticmethod
+    def crossover(lhs, rhs, data: Data) -> 'Genotype':
         body = BodyOrBrainGenome.crossover(lhs.body, rhs.body, data.body)
         brain = BodyOrBrainGenome.crossover(lhs.brain, rhs.brain, data.brain)
         brain.update_lineage(data.brain, [lhs.brain, rhs.brain])
@@ -94,10 +95,17 @@ class Genotype:
     def develop_brain(self, body: BodyV2) -> Brain:
         return develop_brain(self.brain, body)
 
-    @classmethod
-    def distance(cls, lhs: 'Genotype', rhs: 'Genotype') -> float:
+    @staticmethod
+    def distance(lhs: 'Genotype', rhs: 'Genotype') -> float:
         return (.5 * BodyOrBrainGenome.distance(lhs.body, rhs.body)
                 + .5 * BodyOrBrainGenome.distance(lhs.brain, rhs.brain))
+
+    @staticmethod
+    def neat_interface(data: 'Genotype.Data') -> Evolver.Interface:
+        return Evolver.Interface(
+            g_class=Genotype,
+            data=dict(data=data),
+        )
 
     def to_json(self):
         return dict(
@@ -112,8 +120,8 @@ class Genotype:
                 dct.update(data)
             json.dump(dct, f)
 
-    @classmethod
-    def from_file(cls, path) -> Tuple['Genotype', dict]:
+    @staticmethod
+    def from_file(path) -> Tuple['Genotype', dict]:
         with open(path, "rt") as f:
             j = json.load(f)
             genome = Genotype(
