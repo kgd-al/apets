@@ -1,13 +1,36 @@
 """Configuration parameters for this example."""
 from dataclasses import dataclass
-from typing import Annotated
+from enum import auto
+from typing import Annotated, Optional
+
+from strenum import UppercaseStrEnum
 
 from abrain.neat.config import Config as NEATConfig
 
 
+class ExperimentType(UppercaseStrEnum):
+    LOCOMOTION = auto()
+    PUNCH_ONCE = auto()
+    PUNCH_BACK = auto()
+    PUNCH_THRICE = auto()
+    PUNCH_TOGETHER = auto()
+
+
+EXPERIMENT_DURATIONS = {
+    ExperimentType.LOCOMOTION: 5,
+    ExperimentType.PUNCH_ONCE: 5,
+    ExperimentType.PUNCH_BACK: 10,
+    ExperimentType.PUNCH_THRICE: 30,
+    ExperimentType.PUNCH_TOGETHER: 30,
+}
+
+
 @dataclass
 class Config(NEATConfig):
-    simulation_duration: Annotated[int, "Number of seconds per simulation"] = 5
+    experiment: Annotated[ExperimentType, "Experiment to perform"] = None
+    simulation_duration: Annotated[Optional[int],
+                                   ("Number of seconds per simulation"
+                                    " (defaults to experiment-specific value)")] = None
 
     body_brain_mutation_ratio: (
         Annotated)[float, "Probability of mutating the body, otherwise brain"] = 0.1

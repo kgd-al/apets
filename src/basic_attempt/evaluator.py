@@ -10,23 +10,26 @@ from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict
 
 from colorama import Style, Fore
-from revolve2.standards import fitness_functions, terrains
-from revolve2.standards.simulation_parameters import make_standard_batch_parameters
-
-from abrain import ANN3D
-from abrain.neat.config import ConfigBase
-from abrain.neat.evolver import EvaluationResult
-from brain import ABrainInstance
-from genotype import Genotype
+from pyrr import Vector3
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
     simulate_scenes,
 )
+from revolve2.simulation.scene import Pose
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulators.mujoco_simulator import LocalSimulator
-from config import Config
+from revolve2.standards import terrains
+from revolve2.standards.interactive_objects import Ball
+from revolve2.standards.simulation_parameters import make_standard_batch_parameters
+
+from abrain import ANN3D
+from abrain.neat.config import ConfigBase
+from abrain.neat.evolver import EvaluationResult
+from brain import ABrainInstance
+from config import Config, ExperimentType, EXPERIMENT_DURATIONS
+from genotype import Genotype
 
 
 @dataclass
@@ -35,7 +38,10 @@ class Options(ConfigBase):
     headless: Annotated[bool, "Do you think you need a GUI?"] = True
     movie: Annotated[bool, "Do you want a nice video of the robot?"] = False
     start_paused: Annotated[bool, "Should we let you a good look at the robot first?"] = False
-    file: Annotated[Optional[Path], "If a rerun, path to the investigated robot's genome"] = None
+
+    file: Annotated[Optional[Path], "Path to the genome under re-evaluation."] = None
+    duration: Annotated[Optional[int], ("Simulation duration in seconds."
+                                        " Overwrites the value used in evolution")] = None
 
 
 class Evaluator(Eval):
@@ -63,15 +69,21 @@ class Evaluator(Eval):
         elif config.threads is None:
             config.threads = len(os.sched_getaffinity(0))
 
+        if config.simulation_duration is None:
+            if options.rerun and options.duration is not None:
+                config.simulation_duration = options.duration
+            else:
+                config.simulation_duration = EXPERIMENT_DURATIONS[config.experiment]
+
         cls._data_folder = config.data_root
-        if options and options.file is not None:
-            cls._data_folder = options.file.parent
 
         cls._log = getattr(config, "logger", None)
         if cls._log and verbose:
             cls._log.info(f"Configuration:\n"
                           f"{pprint.pformat(cls.config)}\n"
                           f"{pprint.pformat(cls.options)}")
+
+        cls._fitness = getattr(cls, f"fitness_{config.experiment.lower()}")
 
     @classmethod
     def evaluate(cls, genotype: Genotype) -> EvaluationResult:
@@ -86,77 +98,105 @@ class Evaluator(Eval):
 
         config, options = cls.config, cls.options
 
-        try:
-            simulator = LocalSimulator(
-                headless=options.headless,
-                num_simulators=1,
-                start_paused=options.start_paused,
-                # viewer_type="native"
-            )
-            terrain = terrains.flat()
+        simulator = LocalSimulator(
+            headless=options.headless,
+            num_simulators=1,
+            start_paused=options.start_paused,
+            # viewer_type="native"
+        )
+        terrain = terrains.flat()
 
-            robot = genotype.develop(config)
+        robots = [genotype.develop(config)]
 
-            controller: ABrainInstance = robot.brain.make_instance()
+        if options.rerun:
+            controller: ABrainInstance = robots[0].brain.make_instance()
             brain: ANN3D = controller.brain
-            if options.rerun:
+            if not brain.empty():
                 brain.render3D().write_html(config.data_root.joinpath("brain.html"))
 
-            # Create the scenes.
-            scene = ModularRobotScene(terrain=terrain)
+        # Create the scenes.
+        scene = ModularRobotScene(terrain=terrain)
+        for robot in robots:
             scene.add_robot(robot)
 
-            # Simulate all scenes.
-            scene_states = simulate_scenes(
-                simulator=simulator,
-                batch_parameters=make_standard_batch_parameters(
-                    simulation_time=config.simulation_duration,
-                ),
-                scenes=[scene],
-                record_settings=(
-                    None
-                    if not options.rerun else
-                    RecordSettings(
-                        video_directory=str(config.data_root),
-                        overwrite=True,
-                        width=512, height=512
-                    )
+        objects = []
+        if config.experiment is not ExperimentType.LOCOMOTION:
+            ball = Ball(radius=0.05, mass=0.05,
+                        pose=Pose(Vector3([.25, .25, 0.])))
+            scene.add_interactive_object(ball)
+            objects.append(ball)
+            # scene.mark_starting_position()
+
+        # Simulate all scenes.
+        scene_states = simulate_scenes(
+            simulator=simulator,
+            batch_parameters=make_standard_batch_parameters(
+                simulation_time=options.duration or config.simulation_duration,
+            ),
+            scenes=scene,
+            record_settings=(
+                None
+                if not options.rerun else
+                RecordSettings(
+                    video_directory=str(config.data_root),
+                    overwrite=True,
+                    width=512, height=512
                 )
             )
+        )
 
-            # Calculate the xy displacements.
-            xy_displacement = cls.fitness(robot, scene_states[0])
-
-            return EvaluationResult(fitness=xy_displacement)
-
-        except Exception as e:
-            f = config.data_root.joinpath("failures")
-            f.mkdir(parents=True, exist_ok=True)
-            f = f.joinpath(f"{genotype.id()}.json")
-            if not options.rerun:
-                cls._log.error(
-                    f"Evaluation failed: {e.__class__.__name__}({e})."
-                    f" Guilty genotype written to {f}.")
-                cls._log.exception("Stack trace:")
-
-            else:
-                raise RuntimeError("Evaluation failed") from e
-
-            return EvaluationResult()
+        return EvaluationResult(fitness=cls._fitness(robots, objects, scene_states))
 
     @staticmethod
-    def fitness(robot, states):
+    def fitness_locomotion(robots, objects, states):
+        # Get as far as possible with as few modules as possible
+        # Hinges cost more.
+
+        assert len(robots) == 1, "This experiment is not meant for multiple robots"
+        assert len(objects) == 0, "This experiment does not require interactive objects"
+        robot = robots[0]
         modules = {
             t: len(robot.body.find_modules_of_type(t))
             for t in [BrickV2, ActiveHingeV2]
         }
 
         i = int(.8*(len(states)-1))
-        def pos(_i): return states[_i].get_modular_robot_simulation_state(robot)
+        pos = _robot_pos(robot, states)
         return (
-                .01 * fitness_functions.xy_displacement(pos(0), pos(i-1))
-                + fitness_functions.xy_displacement(pos(i), pos(-1))
+                .01 * euclidian_distance(pos(0), pos(i-1))
+                + euclidian_distance(pos(i), pos(-1))
         ) / max(1, modules[BrickV2] + 2 * modules[ActiveHingeV2])
+
+    @staticmethod
+    def fitness_punch_once(robots, objects, states):
+        # Punch the ball as far as possible
+        # If you do not touch the ball at least try to get close to it
+        assert len(robots) == 1, "This experiment is not meant for multiple robots."
+        robot = robots[0]
+        assert len(objects) == 1, "This experiment requires a single object."
+        ball = objects[0]
+        assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
+
+        robot_pos = _robot_pos(robot, states)
+        ball_pos = _ball_pos(ball, states)
+
+        ball_dist = euclidian_distance(ball_pos(0), ball_pos(-1))
+        if ball_dist > 0:
+            return ball_dist
+        else:
+            return -euclidian_distance(ball_pos(-1), robot_pos(-1))
+
+
+def _robot_pos(robot, states):
+    return lambda i: states[i].get_modular_robot_simulation_state(robot).get_pose().position
+
+
+def _ball_pos(ball, states):
+    return lambda i: states[i]._simulation_state.get_multi_body_system_pose(ball).position
+
+
+def euclidian_distance(start, finish):
+    return math.sqrt((finish.x - start.x)**2 + (finish.x - start.x)**2)
 
 
 def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity):

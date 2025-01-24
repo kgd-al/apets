@@ -16,6 +16,9 @@ from genotype import Genotype
 def main(config: Config) -> None:
     start_time = time.perf_counter()
 
+    if config.experiment is None:
+        raise ValueError(f"No experiment specified")
+
     if config.resume is None:
         data = Genotype.Data(config, config.seed)
         evolver = Evolver(config,
@@ -53,7 +56,6 @@ def main(config: Config) -> None:
             config=config, options=Options(
                 rerun=True,
                 movie=True,
-                file=champion,
                 headless=True
             ), verbose=False)
         reeval_results = Evaluator.evaluate(best_robot.genome)
