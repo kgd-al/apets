@@ -4,7 +4,7 @@ set -euo pipefail
 export PYTHONPATH=.
 
 user=kgd
-host=ripper1
+host=hex
 base=$user@$host:data/apets/
 
 exp='test'
@@ -12,10 +12,13 @@ exp='test'
 
 info=""
 # info=--info=progress2
-rsync -avzh $info $base/ remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' \
-  -f '+ *.pkl' -f '+ *.mp4' -f '- *'
+(
+  set -x;
+  rsync -avzh $info $base remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' \
+    -f '+ *.json' -f '+ *.dat' -f '+ *.csv' -f '+ log' -f '+ *.png' -f '+ *.mp4' -f '- *'
+)
 
-[ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate
+#[ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate
 
 # for f in remote/$exp
 # do

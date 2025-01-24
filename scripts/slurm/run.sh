@@ -1,33 +1,33 @@
 #!/bin/bash
 
-set -euo pipefail
-
 usage(){
-  echo "Usage: $0 <name> <seed> <generations> <population>"
+  echo "Usage: $0 <name> <seeds> [...ARGS]"
+  echo "          name is the name of the experiment (top-level folder)"
+  echo "          seeds will populate SLURM's array field"
+  echo "          any other argument are passed through to the executable"
 }
 
-if [ $# -ne 4 ]
+if [ $# -lt 3 ]
 then
   usage
   exit 1
 fi
 
 name=$1
-seed=$2
-data_folder=$HOME/data/apets/$name/run$seed
-generations=$3
-population=$4
-job_name=apets-$name-$seed-${population}x${generations}
+seeds=$2
+shift 2
 
-if [ -d $data_folder ]
-then
-  echo "Target directory <$data_folder> already exists" >&2
-  exit 2
-fi
+data_root=$HOME/data/apets/
+mkdir -p "$data_root"
 
-mkdir -p $data_folder
+slurm_logs=$data_root/slurm_logs/$name/
+mkdir -p "$slurm_logs"
 
-sbatch -o $data_folder/slurm.out -e $data_folder/slurm.err <<EOF
+job_name=apets-$name
+
+slurm_logs_base="$slurm_logs/run-%a"
+
+sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #!/bin/bash
 
 #SBATCH --job-name=$job_name
@@ -35,14 +35,23 @@ sbatch -o $data_folder/slurm.out -e $data_folder/slurm.err <<EOF
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
+#SBATCH --array=$seeds
 #SBATCH --time=10:00:00               # Maximum runtime (D-HH:MM:SS)
 
 source ~/code/venv/bin/activate
 
-echo "Seed is $seed"
-echo "Saving data to $data_folder"
-echo "Evolving $population for $generations generations"
-xvfb-run python src/basic_attempt/main.py --overwrite \
-  --seed $seed --generations $generations --population-size $population \
-   --data-root $data_folder
+seed=\$SLURM_ARRAY_TASK_ID
+data_folder=$data_root$name/run-\$seed
+
+date
+echo "Seed is \$seed"
+echo "Saving data to \$data_folder"
+echo "Additional arguments: $@"
+
+xvfb-run python src/basic_attempt/main.py --overwrite False --seed \$seed  --data-root \$data_folder $@
+
+for ext in out err
+do
+  mv -v $slurm_logs/run-\$seed.\$ext \$data_folder/slurm.\$ext
+done
 EOF

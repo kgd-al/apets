@@ -7,10 +7,17 @@ import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
-from random import Random
-from typing import Optional, Annotated, ClassVar, Tuple, Dict
+from typing import Optional, Annotated, ClassVar, Dict
 
 from colorama import Style, Fore
+from revolve2.standards import fitness_functions, terrains
+from revolve2.standards.simulation_parameters import make_standard_batch_parameters
+
+from abrain import ANN3D
+from abrain.neat.config import ConfigBase
+from abrain.neat.evolver import EvaluationResult
+from brain import ABrainInstance
+from genotype import Genotype
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
@@ -19,14 +26,7 @@ from revolve2.modular_robot_simulation import (
 )
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulators.mujoco_simulator import LocalSimulator
-from revolve2.standards import fitness_functions, terrains
-from revolve2.standards.simulation_parameters import make_standard_batch_parameters
-
-import abrain
-from abrain.neat.evolver import EvaluationResult
-from brain import ABrainInstance
-from config import Config, ConfigBase
-from genotype import Genotype
+from config import Config
 
 
 @dataclass
@@ -98,8 +98,8 @@ class Evaluator(Eval):
             robot = genotype.develop(config)
 
             controller: ABrainInstance = robot.brain.make_instance()
-            brain: abrain.ANN3D = controller.brain
-            if not brain.empty():
+            brain: ANN3D = controller.brain
+            if options.rerun:
                 brain.render3D().write_html(config.data_root.joinpath("brain.html"))
 
             # Create the scenes.
