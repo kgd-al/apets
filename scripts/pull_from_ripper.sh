@@ -15,7 +15,8 @@ info=""
 (
   set -x;
   rsync -avzh $info $base remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' -f '+ failures/' \
-    -f '+ *.json' -f '+ *.dat' -f '+ *.csv' -f '+ log' -f '+ *.png' -f '+ *.mp4' -f '- *'
+    -f '+ *.json' -f '+ *.dat' -f '+ *.csv' -f '+ log' -f '+ *.png' -f '+ *.mp4' -f '+ *.html' \
+    -f '- *'
 )
 
 #[ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate

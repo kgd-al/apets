@@ -11,6 +11,7 @@ from abrain.neat.config import Config as NEATConfig
 class ExperimentType(UppercaseStrEnum):
     LOCOMOTION = auto()
     PUNCH_ONCE = auto()
+    PUNCH_AHEAD = auto()
     PUNCH_BACK = auto()
     PUNCH_THRICE = auto()
     PUNCH_TOGETHER = auto()
@@ -19,6 +20,7 @@ class ExperimentType(UppercaseStrEnum):
 EXPERIMENT_DURATIONS = {
     ExperimentType.LOCOMOTION: 5,
     ExperimentType.PUNCH_ONCE: 5,
+    ExperimentType.PUNCH_AHEAD: 5,
     ExperimentType.PUNCH_BACK: 10,
     ExperimentType.PUNCH_THRICE: 30,
     ExperimentType.PUNCH_TOGETHER: 30,

@@ -7,7 +7,7 @@ import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Annotated, ClassVar, Dict
+from typing import Optional, Annotated, ClassVar, Dict, Callable
 
 from colorama import Style, Fore
 from pyrr import Vector3
@@ -136,7 +136,7 @@ class Evaluator(Eval):
             scenes=scene,
             record_settings=(
                 None
-                if not options.rerun else
+                if not options.movie else
                 RecordSettings(
                     video_directory=str(config.data_root),
                     overwrite=True,
@@ -145,7 +145,16 @@ class Evaluator(Eval):
             )
         )
 
-        return EvaluationResult(fitness=cls._fitness(robots, objects, scene_states))
+        fitness = cls._fitness(robots, objects, scene_states)
+        try:
+            assert not math.isnan(fitness) and not math.isinf(fitness), f"{fitness=}"
+        except Exception as e:
+            raise RuntimeError(f"{fitness=}") from e
+        return EvaluationResult(fitness=fitness)
+
+    @staticmethod
+    def rename_movie(genome_file: Path):
+        genome_file.parent.joinpath("0.mp4").rename(genome_file.with_suffix(".mp4"))
 
     @staticmethod
     def fitness_locomotion(robots, objects, states):
@@ -186,12 +195,35 @@ class Evaluator(Eval):
         else:
             return -euclidian_distance(ball_pos(-1), robot_pos(-1))
 
+    @staticmethod
+    def fitness_punch_ahead(robots, objects, states):
+        # Punch the ball *forward* as far as possible
+        # If you do not touch the ball at least try to get close to it
+        assert len(robots) == 1, "This experiment is not meant for multiple robots."
+        robot = robots[0]
+        assert len(objects) == 1, "This experiment requires a single object."
+        ball = objects[0]
+        assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
 
-def _robot_pos(robot, states):
+        robot_pos = _robot_pos(robot, states)
+        ball_pos = _ball_pos(ball, states)
+
+        b0, b1 = ball_pos(0), ball_pos(-1)
+        ball_dist = euclidian_distance(b0, b1)
+        if ball_dist > 0:
+            return clip(-5, b1.y - b0.y, 5) - clip(0, abs(b1.x - b0.x), 5)
+        else:
+            return -10 - .1 * euclidian_distance(ball_pos(-1), robot_pos(-1))
+
+
+def clip(low, value, high): return max(low, min(value, high))
+
+
+def _robot_pos(robot, states) -> Callable[[int], Vector3]:
     return lambda i: states[i].get_modular_robot_simulation_state(robot).get_pose().position
 
 
-def _ball_pos(ball, states):
+def _ball_pos(ball, states) -> Callable[[int], Vector3]:
     return lambda i: states[i]._simulation_state.get_multi_body_system_pose(ball).position
 
 

@@ -45,6 +45,7 @@ pybind11_global==2.13.6
 pycapnp==2.0.0
 Pygments==2.19.1
 PyOpenGL==3.1.7
+PyOpenGL-accelerate==3.1.9
 pyparsing==3.2.1
 pyrecord==1.0.1
 pyrr==0.10.3

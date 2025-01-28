@@ -1,7 +1,5 @@
 #!/bin/bash
 
-echo "2"
-
 exp="test"
 if [ $# -ge 1 ]
 then
@@ -27,12 +25,12 @@ do
   if [ -n "$errors" ]
   then
     errors_str="$errors_str\033[31m$name\033[0m $errors\n"
-#    continue
+    continue
   fi
 
   slurm_err=$slurm_base.err
   [ ! -f $slurm_base.err ] && slurm_err=$(dirname $file)/slurm.err
-  if [ $(wc -l < $slurm_err) -gt 0 ]
+  if [ $(grep -v -e "libEGL warning" -e '^$' $slurm_err | wc -l) -gt 0 ]
   then
     errors_str="$errors_str\033[31m$name\033[0m $(cat $slurm_err)\n"
     continue

@@ -26,8 +26,6 @@ def get_config(file: Path):
 
 def main() -> None:
     """Perform the rerun."""
-    setup_logging()
-
     parser = argparse.ArgumentParser()
     Options.populate_argparser(parser)
     parser.add_argument("file", type=Path,
@@ -42,6 +40,7 @@ def main() -> None:
 
     options = parser.parse_args(namespace=Options())
 
+    setup_logging()
     options.rerun = True
     print(options)
 
@@ -70,7 +69,8 @@ def main() -> None:
     try:
         result = Evaluator.evaluate(genome)
 
-
+        if options.movie:
+            Evaluator.rename_movie(file)
 
         if performance_compare(result,
                                EvaluationResult(fitness, stats),
