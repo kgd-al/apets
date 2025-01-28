@@ -1,33 +1,27 @@
 """Rerun a robot with given body and parameters."""
 import argparse
 import logging
-import pickle
-import pprint
 from pathlib import Path
 
-from abrain.neat.evolver import EvaluationResult, Evolver
-from basic_attempt.config import ExperimentType
-from config import Config
-from genotype import Genotype
-from evaluator import Evaluator, Options, performance_compare
-from individual import Individual
 from revolve2.experimentation.logging import setup_logging
+
+from abrain.neat.evolver import EvaluationResult, Evolver
+from config import ExperimentType
+from evaluator import Evaluator, Options, performance_compare
+from genotype import Genotype
 
 
 def get_config(file: Path):
-    print(file)
     root = file.parent.resolve()
-    print(root)
     while not (config := root.joinpath('evolution.json')).exists():
-        print(root, '->', root.parent)
         root = root.parent
         if root == Path('/') or root == Path('.'):
             raise ValueError(f"Could not find evolution.json in any parent"
                              f" directory to '{file}'")
-    config = Evolver.load_config(config)
-    config.data_root = config.data_root.resolve()
+    config, data = Evolver.load_config(config)
     assert config is not None
-    return config
+    assert data is not None
+    return config, data["data"]
 
 
 def main() -> None:
@@ -41,6 +35,10 @@ def main() -> None:
     parser.add_argument("--experiment", type=ExperimentType,
                         help="The experiment type to re-run (can be different"
                              " from the one used during evolution).")
+    parser.add_argument("--render", type=str, nargs='?',
+                        help="Render the genotype to file with provided"
+                             " extension (or png)",
+                        const="png", default=None)
 
     options = parser.parse_args(namespace=Options())
 
@@ -52,15 +50,18 @@ def main() -> None:
     file = options.file.resolve()
     assert file.exists(), f"{file=} doesn't exist"
 
-    config = get_config(file)
+    config, static_data = get_config(file)
     config.data_root = file.parent
 
-    if config.experiment != options.experiment:
+    if options.experiment is not None and config.experiment != options.experiment:
         logging.info(f"Evaluating on {options.experiment} instead of {config.experiment}")
         config.experiment = options.experiment
 
     genome, data = Genotype.from_file(file)
     fitness, stats = data["fitness"], data.get("stats", {})
+
+    if options.render:
+        genome.to_dot(file, options.render, static_data)
 
     logging.info(f"Fitness from file: {fitness}")
 
@@ -68,6 +69,9 @@ def main() -> None:
 
     try:
         result = Evaluator.evaluate(genome)
+
+
+
         if performance_compare(result,
                                EvaluationResult(fitness, stats),
                                verbosity=2):

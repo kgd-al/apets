@@ -14,7 +14,7 @@ info=""
 # info=--info=progress2
 (
   set -x;
-  rsync -avzh $info $base remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' \
+  rsync -avzh $info $base remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' -f '+ failures/' \
     -f '+ *.json' -f '+ *.dat' -f '+ *.csv' -f '+ log' -f '+ *.png' -f '+ *.mp4' -f '- *'
 )
 
@@ -57,3 +57,5 @@ info=""
 # # cd -
 #
 # pgrep -a feh | grep $exp'/$' > /dev/null || feh -.Z --reload 10 remote/$exp/ 2>/dev/null &
+
+find remote/$exp/ -name '*.mp4' | xargs vlc --no-random --no-loop 2> /dev/null

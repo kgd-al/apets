@@ -1,9 +1,11 @@
 """Genotype class."""
+import logging
 from copy import deepcopy
 
 import json
 import pprint
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Tuple
 
 from abrain import Genome as BodyOrBrainGenome
@@ -133,3 +135,16 @@ class Genotype:
 
     def print_json(self):
         pprint.pprint(self.to_json())
+
+    def to_dot(self, path: Path, ext: str, data: Data):
+        brain = path.parent.joinpath(f"{path.stem}_brain.{ext}")
+        if self.brain.to_dot(data.brain, brain, ext, title="Brain"):
+            logging.info(f"Rendered brain CPPN to {brain}")
+        else:
+            logging.error(f"Failed to render brain CPPN to {brain}")
+
+        body = path.parent.joinpath(f"{path.stem}_body.{ext}")
+        if self.body.to_dot(data.body, body, ext, title="Body"):
+            logging.info(f"Rendered body CPPN to {body}")
+        else:
+            logging.error(f"Failed to render body CPPN to {body}")

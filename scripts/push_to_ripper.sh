@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -euo pipefail
-
 user=kgd
 host=hex
 base=$user@$host:code
@@ -15,6 +13,15 @@ update(){
 }
 
 line
+pip freeze --exclude-editable > .requirements
+diff .requirements requirements.txt > /dev/null
+update=$?
+if [ $update -gt 0 ]
+then
+  mv -v .requirements requirements.txt
+  line
+fi
+
 update apets src scripts requirements.txt
 
 line
@@ -23,6 +30,17 @@ update abrain -f '- *.so' -f '- .egg-info/' src commands.sh CMakeLists.txt setup
 line
 revolve_dirs=$(ls -d ../revolve/*/ | cut -d/ -f 3)
 update revolve $revolve_dirs student_install.sh requirements_editable.txt README.md
+
+if [ $update -gt 0 ]
+then
+  line
+  echo "Updating dependencies"
+  ssh $user@$host bash <<EOF
+    cd code/apets
+    source ../venv/bin/activate
+    pip install -r requirements.txt --require-virtualenv
+EOF
+fi
 
 if [ $# -ge 1 ] && [ "$1" == '--compile' ]
 then

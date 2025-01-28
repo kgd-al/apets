@@ -46,13 +46,29 @@ do
   fi
 
 #  gen=$(jq ._generation $(dirname $file)/evolution.json)
-  gen=$(grep -m 1 -o '"_generation": [0-9]*,' $(dirname $file)/evolution.json | cut -d' ' -f2 | tr -d ,)
-  if [ -n "$gen" ]
+#  gen=$(grep -m 1 -o '"_generation": [0-9]*,' $(dirname $file)/evolution.json | cut -d' ' -f2 | tr -d ,)
+#  if [ -n "$gen" ]
+#  then
+#    running_str="$running_str\033[33m$name\033[0m $gen\n"
+#  else
+#    running_str="$running_str\033[37m$name\033[0m Starting\n"
+#  fi
+
+  # get header
+  if [ -z "$header" ]
   then
-    running_str="$running_str\033[33m$name\033[0m $gen\n"
+    header=$(grep -m 1 '[[]EVO' $(dirname $file)/log| cut -c 43-)
+    running_str="${running_str}header $header\n"
+  fi
+
+  evo=$(tac $(dirname $file)/log | grep -m 1 '[[]EVO' | cut -c 43-)
+  if [ -n "$evo" ]
+  then
+    running_str="$running_str\033[33m$name\033[0m $evo\n"
   else
     running_str="$running_str\033[37m$name\033[0m Starting\n"
   fi
+
 done < <(ls -v ~/data/apets/$exp/*/log)
 
 printf "$running_str" | column -t -o ' '

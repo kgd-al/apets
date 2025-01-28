@@ -510,7 +510,12 @@ class DefaultBodyPlan(__BodyPlan):
 
         """We select the module type for the current position using the first output of the CPPN network."""
         types = [None, BrickV2, ActiveHingeV2]
-        target_idx = max(0, int(outputs[0] * len(types) - 1e-6))
+        try:
+            target_idx = max(0, int(outputs[0] * len(types) - 1e-6))
+        except Exception as e:
+            print("[kgd-debug]", "inputs:", x, y, z, chain_length)
+            print("[kgd-debug]", "outputs:", outputs)
+            raise RuntimeError from e
         module_type = types[target_idx]
 
         """

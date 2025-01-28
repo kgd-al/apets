@@ -34,7 +34,7 @@ sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=32
 #SBATCH --array=$seeds
 #SBATCH --time=10:00:00               # Maximum runtime (D-HH:MM:SS)
 
@@ -48,10 +48,13 @@ echo "Seed is \$seed"
 echo "Saving data to \$data_folder"
 echo "Additional arguments: $@"
 
-xvfb-run python src/basic_attempt/main.py --overwrite False --seed \$seed  --data-root \$data_folder $@
+#xvfb-run
+export MUJOCO_GL=egl
+python src/basic_attempt/main.py --overwrite False --seed \$seed --data-root \$data_folder $@
 
 for ext in out err
 do
   mv -v $slurm_logs/run-\$seed.\$ext \$data_folder/slurm.\$ext
 done
+
 EOF

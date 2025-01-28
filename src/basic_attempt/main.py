@@ -55,7 +55,7 @@ def main(config: Config) -> None:
         Evaluator.initialize(
             config=config, options=Options(
                 rerun=True,
-                movie=True,
+                movie=False,
                 headless=True
             ), verbose=False)
         reeval_results = Evaluator.evaluate(best_robot.genome)
