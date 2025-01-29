@@ -46,7 +46,7 @@ def main() -> None:
 
     if options.file == Path("last"):
         options.file = Path("tmp/last/champion.json")
-    file = options.file.resolve()
+    file = options.file.absolute()
     assert file.exists(), f"{file=} doesn't exist"
 
     config, static_data = get_config(file)

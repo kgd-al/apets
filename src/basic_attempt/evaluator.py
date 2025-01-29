@@ -17,7 +17,8 @@ from revolve2.modular_robot_simulation import (
     ModularRobotScene,
     simulate_scenes,
 )
-from revolve2.simulation.scene import Pose
+from revolve2.simulation.scene import Pose, Color
+from revolve2.simulation.scene.geometry.textures import Texture
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.standards import terrains
@@ -117,15 +118,43 @@ class Evaluator(Eval):
         # Create the scenes.
         scene = ModularRobotScene(terrain=terrain)
         for robot in robots:
-            scene.add_robot(robot)
+            pose = Pose()
+            scene.add_robot(robot, pose)
+
+            if options.rerun:
+                scene.add_site(
+                    parent=None,
+                    name="robot_start", pos=pose.position,
+                    size=[.1, .1, .005],
+                    rgba=[.1, 0., 0, 1.],
+                    type="ellipsoid"
+                )
 
         objects = []
         if config.experiment is not ExperimentType.LOCOMOTION:
-            ball = Ball(radius=0.05, mass=0.05,
-                        pose=Pose(Vector3([.25, .25, 0.])))
+            r = .05
+            pose = Pose(Vector3([.5, 0., .05]))
+            ball = Ball(radius=r, mass=0.05, pose=pose,
+                        texture=Texture(base_color=Color(0, 255, 0, 255)))
             scene.add_interactive_object(ball)
             objects.append(ball)
-            # scene.mark_starting_position()
+
+            if options.rerun:
+                scene.add_site(
+                    parent=None,
+                    name="ball_start", pos=[pose.position.x, pose.position.y, 0],
+                    size=[r, r, .001],
+                    rgba=[0., .1, 0, 1.],
+                    type="ellipsoid"
+                )
+
+        if options.rerun:
+            scene.add_camera(
+                name="tracking-camera",
+                mode="targetbody",
+                target=f"mbs{len(robots)+len(objects)}/",
+                pos=[-1, 0, 1]
+            )
 
         # Simulate all scenes.
         scene_states = simulate_scenes(
@@ -140,7 +169,8 @@ class Evaluator(Eval):
                 RecordSettings(
                     video_directory=str(config.data_root),
                     overwrite=True,
-                    width=512, height=512
+                    width=512, height=512,
+                    camera_type="fixed", camera_id=0
                 )
             )
         )
@@ -154,7 +184,12 @@ class Evaluator(Eval):
 
     @staticmethod
     def rename_movie(genome_file: Path):
-        genome_file.parent.joinpath("0.mp4").rename(genome_file.with_suffix(".mp4"))
+        src = genome_file.parent.joinpath("0.mp4")
+        assert src.exists(), f"{src=} does not exist"
+        dst = genome_file.parent.joinpath(genome_file.stem).with_suffix(".mp4")
+        src.rename(dst)
+        assert dst.exists(), f"{dst=} does not exist"
+        logging.info(f"Renamed {src=} to {dst=}")
 
     @staticmethod
     def fitness_locomotion(robots, objects, states):
@@ -211,7 +246,7 @@ class Evaluator(Eval):
         b0, b1 = ball_pos(0), ball_pos(-1)
         ball_dist = euclidian_distance(b0, b1)
         if ball_dist > 0:
-            return clip(-5, b1.y - b0.y, 5) - clip(0, abs(b1.x - b0.x), 5)
+            return clip(-5, b1.x - b0.x, 5) - clip(0, abs(b1.y - b0.y), 5)
         else:
             return -10 - .1 * euclidian_distance(ball_pos(-1), robot_pos(-1))
 

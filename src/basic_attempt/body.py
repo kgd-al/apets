@@ -399,6 +399,7 @@ def torso_body() -> BodyV2:
     body.core_v2.right_face.bottom = ActiveHingeV2(RightAngles.DEG_0)
     body.core_v2.right_face.bottom.attachment = ActiveHingeV2(RightAngles.DEG_0)
     body.core_v2.right_face.bottom.attachment.attachment = BrickV2(RightAngles.DEG_0)
+    body.core_v2.back_face.bottom = BrickV2(RightAngles.DEG_0)
     return body
 
 

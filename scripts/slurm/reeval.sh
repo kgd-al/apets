@@ -25,8 +25,16 @@ export MUJOCO_GL=egl
 
 find "$root" -name "champion.json" | while read champ
 do
+    echo "--"
   movie=$(dirname $champ)/$(basename $champ .json).mp4
-  [ -f "$movie" ] && continue
-  python src/basic_attempt/rerun.py "$champ" --movie True --headless True "$@" || exit 2
+  if [ -f "$movie" ]
+  then
+    echo "Not regenerating movie for $champ"
+    echo
+    continue
+  else
+    python src/basic_attempt/rerun.py "$champ" --movie --headless "$@" || exit 2
+    echo
+  fi
 #  --render png
 done
