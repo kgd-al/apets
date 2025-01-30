@@ -2,7 +2,9 @@
 
 import argparse
 import math
+import pprint
 import time
+from dataclasses import fields
 from datetime import timedelta
 
 import humanize
@@ -19,8 +21,6 @@ def main(config: Config) -> None:
 
     if config.experiment is None:
         raise ValueError(f"No experiment specified")
-
-    config.initial_distance_threshold = 1.5
 
     if config.resume is None:
         data = Genotype.Data(config, config.seed)

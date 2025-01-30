@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Callable
 
 from colorama import Style, Fore
+from mujoco import MjModel, MjData
 from pyrr import Vector3
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
@@ -18,8 +19,10 @@ from revolve2.modular_robot_simulation import (
     simulate_scenes,
 )
 from revolve2.simulation.scene import Pose, Color
-from revolve2.simulation.scene.geometry.textures import Texture
+from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
+from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
+from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.standards import terrains
 from revolve2.standards.interactive_objects import Ball
@@ -36,13 +39,31 @@ from genotype import Genotype
 @dataclass
 class Options(ConfigBase):
     rerun: Annotated[bool, "Is this a rerun or are we evolving"] = False
-    headless: Annotated[bool, "Do you think you need a GUI?"] = True
+    headless: Annotated[bool, "Do you think you need a GUI?"] = False
     movie: Annotated[bool, "Do you want a nice video of the robot?"] = False
     start_paused: Annotated[bool, "Should we let you a good look at the robot first?"] = False
 
     file: Annotated[Optional[Path], "Path to the genome under re-evaluation."] = None
     duration: Annotated[Optional[int], ("Simulation duration in seconds."
                                         " Overwrites the value used in evolution")] = None
+
+
+def robot_position(exp: ExperimentType):
+    if exp in [ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
+        return .5
+    elif exp in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
+        return 5
+    elif exp in [ExperimentType.PUNCH_TOGETHER]:
+        return 0
+
+
+def camera_position(exp: ExperimentType):
+    if exp in [ExperimentType.LOCOMOTION, ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
+        return -1
+    elif exp in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
+        return -2
+    elif exp in [ExperimentType.PUNCH_TOGETHER]:
+        return -5
 
 
 class Evaluator(Eval):
@@ -58,7 +79,7 @@ class Evaluator(Eval):
                    verbose=True):
         cls.config = config
 
-        options = options or Options()
+        options = options or Options(headless=True)
         cls.options = options
         # if options.rerun:
         #     options.rerun = False
@@ -105,7 +126,21 @@ class Evaluator(Eval):
             start_paused=options.start_paused,
             # viewer_type="native"
         )
-        terrain = terrains.flat()
+
+        terrain = terrains.flat(
+            size=Vector2([20, 20]),
+            texture=Texture(
+                # base_color=Color(128, 128, 196, 255),
+                reference=TextureReference(
+                    builtin="checker"
+                ),
+                base_color=Color(255, 255, 255, 255),
+                primary_color=Color(128, 128, 160, 255),
+                secondary_color=Color(64, 64, 80, 255),
+                repeat=(2, 2),
+                size=(1024, 1024),
+                map_type=MapType.MAP2D
+            ))
 
         robots = [genotype.develop(config)]
 
@@ -130,10 +165,21 @@ class Evaluator(Eval):
                     type="ellipsoid"
                 )
 
+                for i in range(5):
+                    scene.add_site(
+                        parent=None,
+                        name=f"mark_{i+1}m",
+                        pos=[i+1, 0, 0],
+                        size=[.005, .02, .0001],
+                        rgba=[1, 1, 1, 1],
+                        type="box"
+                    )
+
         objects = []
         if config.experiment is not ExperimentType.LOCOMOTION:
             r = .05
-            pose = Pose(Vector3([.5, 0., .05]))
+            x = robot_position(config.experiment)
+            pose = Pose(Vector3([x, 0., .05]))
             ball = Ball(radius=r, mass=0.05, pose=pose,
                         texture=Texture(base_color=Color(0, 255, 0, 255)))
             scene.add_interactive_object(ball)
@@ -148,12 +194,15 @@ class Evaluator(Eval):
                     type="ellipsoid"
                 )
 
+        if config.experiment in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
+            simulator.register_callback(Callback.START, cls.push_ball)
+
         if options.rerun:
             scene.add_camera(
                 name="tracking-camera",
                 mode="targetbody",
                 target=f"mbs{len(robots)+len(objects)}/",
-                pos=[-1, 0, 1]
+                pos=[camera_position(config.experiment), 0, 1]
             )
 
         # Simulate all scenes.
@@ -169,7 +218,7 @@ class Evaluator(Eval):
                 RecordSettings(
                     video_directory=str(config.data_root),
                     overwrite=True,
-                    width=512, height=512,
+                    width=640, height=480,
                     camera_type="fixed", camera_id=0
                 )
             )
@@ -249,6 +298,15 @@ class Evaluator(Eval):
             return clip(-5, b1.x - b0.x, 5) - clip(0, abs(b1.y - b0.y), 5)
         else:
             return -10 - .1 * euclidian_distance(ball_pos(-1), robot_pos(-1))
+
+    @staticmethod
+    def fitness_punch_back(robots, objects, states):
+        # For now do the same thing. Maybe we can remove the gradient later
+        return Evaluator.fitness_punch_ahead(robots, objects, states)
+
+    @staticmethod
+    def push_ball(model: MjModel, data: MjData):
+        data.qvel[-6] -= [10]
 
 
 def clip(low, value, high): return max(low, min(value, high))

@@ -34,6 +34,8 @@ class Config(NEATConfig):
                                    ("Number of seconds per simulation"
                                     " (defaults to experiment-specific value)")] = None
 
+    initial_distance_threshold: float = 1.5  # Overridden from NEATConfig
+
     body_brain_mutation_ratio: (
         Annotated)[float, "Probability of mutating the body, otherwise brain"] = 0.1
 

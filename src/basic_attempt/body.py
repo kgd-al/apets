@@ -390,6 +390,11 @@ class __BodyPlan(abc.ABC):
         pass
 
 
+def empty_body() -> BodyV2:
+    print("Forcing empty body")
+    return BodyV2()
+
+
 def torso_body() -> BodyV2:
     print("Forcing torso body")
     body = BodyV2()
@@ -404,6 +409,7 @@ def torso_body() -> BodyV2:
 
 
 def gecko_body() -> BodyV2:
+    print("Forcing gecko body")
     def add_arms(m: Module):
         m.left = ActiveHingeV2(math.pi / 2.0)
         m.left.attachment = ActiveHingeV2(math.pi / 2.0)
@@ -424,8 +430,9 @@ def gecko_body() -> BodyV2:
 class DefaultBodyPlan(__BodyPlan):
     @classmethod
     def develop(cls, genotype: Genome, inputs: str, outputs: str) -> BodyV2:
-        # return gecko_body()
+        # return empty_body()
         # return torso_body()
+        # return gecko_body()
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"

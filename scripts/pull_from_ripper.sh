@@ -8,7 +8,11 @@ host=hex
 base=$user@$host:data/apets/
 
 exp='test'
-[ $# -ge 1 ] && exp=$1
+if [ $# -ge 1 ]
+then
+  exp=$1
+  shift
+fi
 
 info=""
 # info=--info=progress2
@@ -59,4 +63,4 @@ info=""
 #
 # pgrep -a feh | grep $exp'/$' > /dev/null || feh -.Z --reload 10 remote/$exp/ 2>/dev/null &
 
-find remote/$exp/ -name '*.mp4' | xargs vlc --no-random --no-loop 2> /dev/null
+[ $# -gt 0 ] && [ $1 == "--vlc" ] && find remote/$exp/ -name '*.mp4' | xargs vlc --no-random --no-loop 2> /dev/null
