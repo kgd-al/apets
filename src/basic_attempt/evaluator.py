@@ -100,7 +100,7 @@ class BackAndForthFitnessData(FitnessData):
 
     __velocity = 10.
 
-    __debug = True
+    __debug = False
 
     def __init__(self, robots, objects, state: Literal[-1, 1] = 1):
         super().__init__(robots, objects)
@@ -110,11 +110,9 @@ class BackAndForthFitnessData(FitnessData):
         self.robots_id = None
 
         self.state = state
+        self.exchanges = 0
         self.pos, self.vel = None, None
         self.fitness = 0
-
-        if self.__debug:
-            self.state = -1
 
     @staticmethod
     def _2d_pos(data: MjData, obj_id: int):
@@ -140,11 +138,6 @@ class BackAndForthFitnessData(FitnessData):
         )
         return robot0, robot1
 
-    def coordinate_system(self, data: MjData):
-        p0, p1 = self.robots_pos(data)
-        x, y = (p1 - p0).normalized
-        return Vector2([x, y]), Vector2([-y, x])
-
     def start(self, model: MjModel, data: MjData,
               mapping: AbstractionToMujocoMapping):
         self.mapping = mapping
@@ -168,8 +161,15 @@ class BackAndForthFitnessData(FitnessData):
         changed_direction = (self.vel.x * vel.x < 0)
 
         # Compute instant fitness
-        u, v = self.coordinate_system(data)
-        print(u, v)
+        p0, p1 = self.robots_pos(data)
+        b = self._2d_pos(data, self.ball_id)
+        if self.state > 0:  # Ball goes towards second robot / fixed point
+            x, y = (p1 - b).normalized
+        else:  # Ball goes towards first robot
+            x, y = (p0 - b).normalized
+        u, v = Vector2([x, y]), Vector2([-y, x])
+
+        self.fitness += self.exchanges * delta_pos.dot(u) - abs(delta_pos.dot(v))
 
         # Check if we changed state (and if we need to punch the ball)
         if not self.__debug and len(self.robots) == 2 and changed_direction:
@@ -177,20 +177,23 @@ class BackAndForthFitnessData(FitnessData):
 
         elif len(self.robots) == 1:
             if pos.x >= 5 and vel.x > 0:
-                new_vel = -vel
+                # new_vel = -vel
+                new_vel = self.__velocity * (p0 - b).normalized
                 self.state = -1
             else:
                 if self.__debug and pos.x <= 0 and vel.x <= 0:
-                    new_vel = Vector2([self.__velocity, 0])
+                    new_vel = self.__velocity * u
                     self.state = 1
-                elif not self.__debug and vel > 0 and changed_direction:
+                elif not self.__debug and vel.x > 0 and changed_direction:
                     self.state = 1
 
         if self.state != old_state:
-            print(">> New state:", self.state)
+            self.exchanges += 1
+            # print(">> New state:", self.state)
 
         if new_vel != vel:
             self.set_ball_velocity(data, new_vel)
+            # print(">> New vel:", new_vel)
 
 
 class Evaluator(Eval):
@@ -361,7 +364,7 @@ class Evaluator(Eval):
             )
         )
 
-        fd.update(scene_states=scene_states)
+        fd.update(states=scene_states)
         fitness = cls._fitness(fd)
         try:
             assert not math.isnan(fitness) and not math.isinf(fitness), f"{fitness=}"
@@ -439,7 +442,11 @@ class Evaluator(Eval):
     @staticmethod
     def fitness_punch_thrice(fd: BackAndForthFitnessData):
         robot, ball = single_robot_and_ball(fd)
-        return fd.fitness
+        if fd.fitness == 0:
+            return -100-euclidian_distance(_ball_pos(ball, fd)(-1),
+                                           _robot_pos(robot, fd)(-1))
+        else:
+            return fd.fitness
 
     @staticmethod
     def push_ball(model: MjModel, data: MjData,

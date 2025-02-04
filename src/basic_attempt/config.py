@@ -22,8 +22,8 @@ EXPERIMENT_DURATIONS = {
     ExperimentType.PUNCH_ONCE: 5,
     ExperimentType.PUNCH_AHEAD: 5,
     ExperimentType.PUNCH_BACK: 10,
-    ExperimentType.PUNCH_THRICE: 30,
-    ExperimentType.PUNCH_TOGETHER: 30,
+    ExperimentType.PUNCH_THRICE: 20,
+    ExperimentType.PUNCH_TOGETHER: 20,
 }
 
 
