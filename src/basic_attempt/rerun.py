@@ -72,8 +72,8 @@ def main() -> None:
         if options.movie:
             Evaluator.rename_movie(file)
 
-        if performance_compare(result,
-                               EvaluationResult(fitness, stats),
+        if performance_compare(EvaluationResult(fitness, stats),
+                               result,
                                verbosity=2):
             logging.error(f"Re-evaluation gave different results")
     except Exception as e:

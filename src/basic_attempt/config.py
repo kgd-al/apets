@@ -30,6 +30,7 @@ EXPERIMENT_DURATIONS = {
 @dataclass
 class Config(NEATConfig):
     experiment: Annotated[ExperimentType, "Experiment to perform"] = None
+    centered_ball: Annotated[bool, "Whether the ball is facing the robot"] = False
     simulation_duration: Annotated[Optional[int],
                                    ("Number of seconds per simulation"
                                     " (defaults to experiment-specific value)")] = None

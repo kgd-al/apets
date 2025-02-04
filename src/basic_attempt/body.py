@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from queue import Queue
 from random import Random
-from typing import Any, List
+from typing import Any, List, Union, Tuple
 
 import numpy as np
 from abrain import Genome, CPPN
@@ -214,6 +214,23 @@ class _Grid:
         if _DEBUG > 1:
             self.__debug_print("register", position, aabb)
 
+    def global_aabb(self):
+        _g_aabb = AABB(vec(0., 0., 0.), vec(0., 0., 0.))
+
+        for aabbs in self._data.values():
+            for aabb in aabbs:
+                _aabb_min = self._unscaled(aabb.min)
+                _aabb_max = self._unscaled(aabb.max)
+
+                _g_aabb.min.x = min(_g_aabb.min.x, _aabb_min.x)
+                _g_aabb.min.y = min(_g_aabb.min.y, _aabb_min.y)
+                _g_aabb.min.z = min(_g_aabb.min.z, _aabb_min.z)
+                _g_aabb.max.x = max(_g_aabb.max.x, _aabb_max.x)
+                _g_aabb.max.y = max(_g_aabb.max.y, _aabb_max.y)
+                _g_aabb.max.z = max(_g_aabb.max.z, _aabb_max.z)
+
+        return _g_aabb
+
     def _aabb(self, position: Vector3, rotation: Quaternion, module: Module):
         mbb = abs(rotation * module.bounding_box) / 2
         aabb = AABB(self._scaled(position - mbb),
@@ -239,6 +256,9 @@ class _Grid:
     def _scaled(self, v: Vector3):
         return Vector3([round(a * b, 6) for a, b in zip(v, self._scaling)])
         # return Vector3([a * b for a, b in zip(v, self._scaling)])
+
+    def _unscaled(self, v: Vector3):
+        return Vector3([a / b for a, b in zip(v, self._scaling)])
 
     def __debug_print(self, name, position, aabb):
         print(f"{name}({position}:\n {aabb=}\n",

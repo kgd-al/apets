@@ -6,7 +6,7 @@ import json
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Union
 
 from abrain import Genome as BodyOrBrainGenome
 from revolve2.modular_robot import ModularRobot
@@ -14,7 +14,7 @@ from revolve2.modular_robot.body.v2 import BodyV2
 from revolve2.modular_robot.brain import Brain
 
 from abrain.neat.evolver import Evolver
-from body import DefaultBodyPlan
+from body import DefaultBodyPlan, AABB
 from brain import develop as develop_brain
 from config import Config
 

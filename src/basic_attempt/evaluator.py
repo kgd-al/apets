@@ -1,4 +1,5 @@
 """Evaluator class."""
+import functools
 import json
 import logging
 import math
@@ -7,7 +8,7 @@ import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Annotated, ClassVar, Dict, Callable
+from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal
 
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
@@ -18,12 +19,13 @@ from revolve2.modular_robot_simulation import (
     ModularRobotScene,
     simulate_scenes,
 )
-from revolve2.simulation.scene import Pose, Color
+from revolve2.simulation.scene import Pose, Color, UUIDKey
 from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
 from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
+from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
 from revolve2.standards import terrains
 from revolve2.standards.interactive_objects import Ball
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
@@ -48,13 +50,29 @@ class Options(ConfigBase):
                                         " Overwrites the value used in evolution")] = None
 
 
-def robot_position(exp: ExperimentType):
-    if exp in [ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
-        return .5
-    elif exp in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
-        return 5
-    elif exp in [ExperimentType.PUNCH_TOGETHER]:
-        return 0
+def vec(x, y, z): return Vector3([x, y, z], dtype=float)
+
+
+X_OFFSET = .25
+Y_OFFSET = .25
+
+
+def robot_position(config: Config):
+    if config.centered_ball:
+        return vec(0, 0, 0)
+    else:
+        return vec(-X_OFFSET, Y_OFFSET, 0)
+
+
+def ball_position(config: Config, r: float):
+    exp = config.experiment
+    x = 0
+    if exp in [ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD,
+               ExperimentType.PUNCH_THRICE, ExperimentType.PUNCH_TOGETHER]:
+        x = 2 * X_OFFSET if config.centered_ball else 0
+    elif exp in [ExperimentType.PUNCH_BACK]:
+        x = 5
+    return vec(x, 0, r)
 
 
 def camera_position(exp: ExperimentType):
@@ -64,6 +82,115 @@ def camera_position(exp: ExperimentType):
         return -2
     elif exp in [ExperimentType.PUNCH_TOGETHER]:
         return -5
+
+
+class FitnessData:
+    def __init__(self, robots, objects):
+        self.robots = robots
+        self.objects = objects
+        self.states = None
+
+    def update(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class BackAndForthFitnessData(FitnessData):
+    # __magic_bullet_ball_pos = slice(-7, -5)
+    __magic_bullet_ball_vel = slice(-6, -4)
+
+    __velocity = 10.
+
+    __debug = True
+
+    def __init__(self, robots, objects, state: Literal[-1, 1] = 1):
+        super().__init__(robots, objects)
+
+        self.mapping: Optional[AbstractionToMujocoMapping] = None
+        self.ball_id = None
+        self.robots_id = None
+
+        self.state = state
+        self.pos, self.vel = None, None
+        self.fitness = 0
+
+        if self.__debug:
+            self.state = -1
+
+    @staticmethod
+    def _2d_pos(data: MjData, obj_id: int):
+        return Vector2(data.xpos[obj_id][:2].copy())
+
+    @staticmethod
+    def _2d_vel(data: MjData, obj_id: int):
+        return Vector2(data.cvel[obj_id][3:5].copy())
+
+    def ball_pos_and_vel(self, data: MjData):
+        bid = self.ball_id
+        return self._2d_pos(data, bid), self._2d_vel(data, bid)
+
+    def set_ball_velocity(self, data: MjData, vel: Vector2):
+        data.qvel[self.__magic_bullet_ball_vel] = vel
+
+    def robots_pos(self, data: MjData):
+        robot0 = self._2d_pos(data, self.robots_id[0])
+        robot1 = (
+            self._2d_pos(data, self.robots_id[1])
+            if len(self.robots) > 1 else
+            Vector2([5, 0])
+        )
+        return robot0, robot1
+
+    def coordinate_system(self, data: MjData):
+        p0, p1 = self.robots_pos(data)
+        x, y = (p1 - p0).normalized
+        return Vector2([x, y]), Vector2([-y, x])
+
+    def start(self, model: MjModel, data: MjData,
+              mapping: AbstractionToMujocoMapping):
+        self.mapping = mapping
+        self.ball_id = mapping.multi_body_system[UUIDKey(self.objects[0])].id
+        # Ugly but working (with a single robot)
+        self.robots_id = [i+2 for i in range(len(self.robots))]
+
+    def before_step(self, model: MjModel, data: MjData):
+        self.pos, self.vel = self.ball_pos_and_vel(data)
+        # print("Before step:", self.pos, self.vel)
+
+    def after_step(self, model: MjModel, data: MjData):
+        pos, vel = self.ball_pos_and_vel(data)
+        delta_pos, delta_vel = [
+            end - start for end, start in zip([pos, vel], [self.pos, self.vel])
+        ]
+        # print("After step:", pos, vel)
+        # print("> Delta", delta_pos, delta_vel)
+        old_state = self.state
+        new_vel = vel
+        changed_direction = (self.vel.x * vel.x < 0)
+
+        # Compute instant fitness
+        u, v = self.coordinate_system(data)
+        print(u, v)
+
+        # Check if we changed state (and if we need to punch the ball)
+        if not self.__debug and len(self.robots) == 2 and changed_direction:
+            self.state = math.copysign(1, vel.x)
+
+        elif len(self.robots) == 1:
+            if pos.x >= 5 and vel.x > 0:
+                new_vel = -vel
+                self.state = -1
+            else:
+                if self.__debug and pos.x <= 0 and vel.x <= 0:
+                    new_vel = Vector2([self.__velocity, 0])
+                    self.state = 1
+                elif not self.__debug and vel > 0 and changed_direction:
+                    self.state = 1
+
+        if self.state != old_state:
+            print(">> New state:", self.state)
+
+        if new_vel != vel:
+            self.set_ball_velocity(data, new_vel)
 
 
 class Evaluator(Eval):
@@ -153,7 +280,7 @@ class Evaluator(Eval):
         # Create the scenes.
         scene = ModularRobotScene(terrain=terrain)
         for robot in robots:
-            pose = Pose()
+            pose = Pose(position=robot_position(config))
             scene.add_robot(robot, pose)
 
             if options.rerun:
@@ -165,21 +292,10 @@ class Evaluator(Eval):
                     type="ellipsoid"
                 )
 
-                for i in range(5):
-                    scene.add_site(
-                        parent=None,
-                        name=f"mark_{i+1}m",
-                        pos=[i+1, 0, 0],
-                        size=[.005, .02, .0001],
-                        rgba=[1, 1, 1, 1],
-                        type="box"
-                    )
-
         objects = []
         if config.experiment is not ExperimentType.LOCOMOTION:
             r = .05
-            x = robot_position(config.experiment)
-            pose = Pose(Vector3([x, 0., .05]))
+            pose = Pose(ball_position(config, r))
             ball = Ball(radius=r, mass=0.05, pose=pose,
                         texture=Texture(base_color=Color(0, 255, 0, 255)))
             scene.add_interactive_object(ball)
@@ -194,7 +310,7 @@ class Evaluator(Eval):
                     type="ellipsoid"
                 )
 
-        if config.experiment in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
+        if config.experiment in [ExperimentType.PUNCH_BACK]:
             simulator.register_callback(Callback.START, cls.push_ball)
 
         if options.rerun:
@@ -204,6 +320,27 @@ class Evaluator(Eval):
                 target=f"mbs{len(robots)+len(objects)}/",
                 pos=[camera_position(config.experiment), 0, 1]
             )
+
+            for i in range(5):
+                scene.add_site(
+                    parent=None,
+                    name=f"mark_{i + 1}m",
+                    pos=[i + 1, 0, 0],
+                    size=[.005, .02, .0001],
+                    rgba=[1, 1, 1, 1],
+                    type="box"
+                )
+
+        if config.experiment in [ExperimentType.PUNCH_THRICE]:
+            fd_class = BackAndForthFitnessData
+        else:
+            fd_class = FitnessData
+        fd = fd_class(robots, objects)
+
+        if config.experiment in [ExperimentType.PUNCH_THRICE]:
+            simulator.register_callback(Callback.START, fd.start)
+            simulator.register_callback(Callback.PRE_STEP, fd.before_step)
+            simulator.register_callback(Callback.POST_STEP, fd.after_step)
 
         # Simulate all scenes.
         scene_states = simulate_scenes(
@@ -224,7 +361,8 @@ class Evaluator(Eval):
             )
         )
 
-        fitness = cls._fitness(robots, objects, scene_states)
+        fd.update(scene_states=scene_states)
+        fitness = cls._fitness(fd)
         try:
             assert not math.isnan(fitness) and not math.isinf(fitness), f"{fitness=}"
         except Exception as e:
@@ -241,18 +379,19 @@ class Evaluator(Eval):
         logging.info(f"Renamed {src=} to {dst=}")
 
     @staticmethod
-    def fitness_locomotion(robots, objects, states):
+    def fitness_locomotion(fd: FitnessData):
         # Get as far as possible with as few modules as possible
         # Hinges cost more.
 
-        assert len(robots) == 1, "This experiment is not meant for multiple robots"
-        assert len(objects) == 0, "This experiment does not require interactive objects"
-        robot = robots[0]
+        assert len(fd.robots) == 1, "This experiment is not meant for multiple robots"
+        assert len(fd.objects) == 0, "This experiment does not require interactive objects"
+        robot = fd.robots[0]
         modules = {
             t: len(robot.body.find_modules_of_type(t))
             for t in [BrickV2, ActiveHingeV2]
         }
 
+        states = fd.states
         i = int(.8*(len(states)-1))
         pos = _robot_pos(robot, states)
         return (
@@ -261,17 +400,12 @@ class Evaluator(Eval):
         ) / max(1, modules[BrickV2] + 2 * modules[ActiveHingeV2])
 
     @staticmethod
-    def fitness_punch_once(robots, objects, states):
+    def fitness_punch_once(fd: FitnessData):
         # Punch the ball as far as possible
         # If you do not touch the ball at least try to get close to it
-        assert len(robots) == 1, "This experiment is not meant for multiple robots."
-        robot = robots[0]
-        assert len(objects) == 1, "This experiment requires a single object."
-        ball = objects[0]
-        assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
-
-        robot_pos = _robot_pos(robot, states)
-        ball_pos = _ball_pos(ball, states)
+        robot, ball = single_robot_and_ball(fd)
+        robot_pos = _robot_pos(robot, fd)
+        ball_pos = _ball_pos(ball, fd)
 
         ball_dist = euclidian_distance(ball_pos(0), ball_pos(-1))
         if ball_dist > 0:
@@ -280,44 +414,58 @@ class Evaluator(Eval):
             return -euclidian_distance(ball_pos(-1), robot_pos(-1))
 
     @staticmethod
-    def fitness_punch_ahead(robots, objects, states):
+    def fitness_punch_ahead(fd: FitnessData):
         # Punch the ball *forward* as far as possible
         # If you do not touch the ball at least try to get close to it
-        assert len(robots) == 1, "This experiment is not meant for multiple robots."
-        robot = robots[0]
-        assert len(objects) == 1, "This experiment requires a single object."
-        ball = objects[0]
-        assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
-
-        robot_pos = _robot_pos(robot, states)
-        ball_pos = _ball_pos(ball, states)
+        robot, ball = single_robot_and_ball(fd)
+        robot_pos = _robot_pos(robot, fd)
+        ball_pos = _ball_pos(ball, fd)
 
         b0, b1 = ball_pos(0), ball_pos(-1)
         ball_dist = euclidian_distance(b0, b1)
         if ball_dist > 0:
-            return clip(-5, b1.x - b0.x, 5) - clip(0, abs(b1.y - b0.y), 5)
+            return (b1.x - b0.x) - abs(b1.y - b0.y)
         else:
             return -10 - .1 * euclidian_distance(ball_pos(-1), robot_pos(-1))
 
     @staticmethod
-    def fitness_punch_back(robots, objects, states):
-        # For now do the same thing. Maybe we can remove the gradient later
-        return Evaluator.fitness_punch_ahead(robots, objects, states)
+    def fitness_punch_back(fd: FitnessData):
+        # Punch the ball back. It's coming right for you!
+        _, ball = single_robot_and_ball(fd)
+        ball_pos = _ball_pos(ball, fd)
+        b0, b1 = ball_pos(0), ball_pos(-1)
+        return (b1.x - b0.x) - abs(b1.y - b0.y)
 
     @staticmethod
-    def push_ball(model: MjModel, data: MjData):
-        data.qvel[-6] -= [10]
+    def fitness_punch_thrice(fd: BackAndForthFitnessData):
+        robot, ball = single_robot_and_ball(fd)
+        return fd.fitness
+
+    @staticmethod
+    def push_ball(model: MjModel, data: MjData,
+                  abstraction: AbstractionToMujocoMapping,
+                  velocity=10):
+        data.qvel[-6] -= [velocity]
+
+
+def single_robot_and_ball(fd: FitnessData):
+    assert len(fd.robots) == 1, "This experiment is not meant for multiple robots."
+    robot = fd.robots[0]
+    assert len(fd.objects) == 1, "This experiment requires a single object."
+    ball = fd.objects[0]
+    assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
+    return robot, ball
 
 
 def clip(low, value, high): return max(low, min(value, high))
 
 
-def _robot_pos(robot, states) -> Callable[[int], Vector3]:
-    return lambda i: states[i].get_modular_robot_simulation_state(robot).get_pose().position
+def _robot_pos(robot, fd: FitnessData) -> Callable[[int], Vector3]:
+    return lambda i: fd.states[i].get_modular_robot_simulation_state(robot).get_pose().position
 
 
-def _ball_pos(ball, states) -> Callable[[int], Vector3]:
-    return lambda i: states[i]._simulation_state.get_multi_body_system_pose(ball).position
+def _ball_pos(ball, fd: FitnessData) -> Callable[[int], Vector3]:
+    return lambda i: fd.states[i]._simulation_state.get_multi_body_system_pose(ball).position
 
 
 def euclidian_distance(start, finish):
