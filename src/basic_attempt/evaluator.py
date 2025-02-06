@@ -10,10 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal
 
+import mujoco
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
-from pyrr import Vector3, Quaternion
+from pyrr import Vector3, Quaternion, Matrix33
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
+from revolve2.modular_robot.body import Module
+from revolve2.modular_robot.body.base import AttachmentFace
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
@@ -22,10 +25,11 @@ from revolve2.modular_robot_simulation import (
 from revolve2.simulation.scene import Pose, Color, UUIDKey
 from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
 from revolve2.simulation.scene.vector2 import Vector2
-from revolve2.simulation.simulator import RecordSettings
+from revolve2.simulation.simulator import RecordSettings, Viewer
 from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
+from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
 from revolve2.standards import terrains
 from revolve2.standards.interactive_objects import Ball
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
@@ -90,7 +94,7 @@ def camera_position(exp: ExperimentType):
 
 
 class FitnessData:
-    def __init__(self, robots, objects):
+    def __init__(self, robots, objects, **kwargs):
         self.robots = robots
         self.objects = objects
         self.states = None
@@ -108,17 +112,23 @@ class BackAndForthFitnessData(FitnessData):
 
     __debug = False
 
-    def __init__(self, robots, objects, state: Literal[-1, 1] = 1):
+    def __init__(self, robots, objects, state: Literal[-1, 1] = 1, render=False):
         super().__init__(robots, objects)
 
         self.mapping: Optional[AbstractionToMujocoMapping] = None
         self.ball_id = None
-        self.robots_id = None
+        self.robots_ix = None
 
-        self.state = state
+        self.state = 1 if len(robots) == 1 else -1
+        self.last_contact = "mbs1"
         self.exchanges = 0
         self.pos, self.vel = None, None
         self.fitness = 0
+
+        self.render = render
+        if render:
+            self.p = None
+            self.u, self.v = None, None
 
     @staticmethod
     def _2d_pos(data: MjData, obj_id: int):
@@ -136,9 +146,9 @@ class BackAndForthFitnessData(FitnessData):
         data.qvel[self.__magic_bullet_ball_vel] = vel
 
     def robots_pos(self, data: MjData):
-        robot0 = self._2d_pos(data, self.robots_id[0])
+        robot0 = self._2d_pos(data, self.robots_ix[0])
         robot1 = (
-            self._2d_pos(data, self.robots_id[1])
+            self._2d_pos(data, self.robots_ix[1])
             if len(self.robots) > 1 else
             Vector2([self.target_distance, 0])
         )
@@ -149,7 +159,11 @@ class BackAndForthFitnessData(FitnessData):
         self.mapping = mapping
         self.ball_id = mapping.multi_body_system[UUIDKey(self.objects[0])].id
         # Ugly but working (with a single robot)
-        self.robots_id = [i+2 for i in range(len(self.robots))]
+        i = 2
+        self.robots_ix = []
+        for r in self.robots:
+            self.robots_ix.append(i)
+            i += len(r.body.find_modules_of_type(ActiveHingeV2)) + 1
 
     def before_step(self, model: MjModel, data: MjData):
         self.pos, self.vel = self.ball_pos_and_vel(data)
@@ -164,7 +178,6 @@ class BackAndForthFitnessData(FitnessData):
         # print("> Delta", delta_pos, delta_vel)
         old_state = self.state
         new_vel = vel
-        changed_direction = (self.vel.x * vel.x < 0)
 
         # Compute instant fitness
         p0, p1 = self.robots_pos(data)
@@ -174,13 +187,20 @@ class BackAndForthFitnessData(FitnessData):
         else:  # Ball goes towards first robot
             x, y = (p0 - b).normalized
         u, v = Vector2([x, y]), Vector2([-y, x])
-
         self.fitness += self.exchanges * delta_pos.dot(u) - abs(delta_pos.dot(v))
 
         # Check if we changed state (and if we need to punch the ball)
-        if len(self.robots) == 2 and changed_direction:
-            if not self.__debug:
-                self.state = math.copysign(1, vel.x)
+        if len(self.robots) == 2:
+            contacts = set()
+            for c in data.contact:
+                name1, name2 = data.geom(c.geom1).name, data.geom(c.geom2).name
+                if ("mbs" in name1 and "mbs" in name2
+                        and (parent1 := name1.split("/")[0]) != (parent2 := name2.split("/")[0])):
+                    contacts.add(min(int(_p) for _p in [parent1[-1], parent2[-1]]))
+            if len(contacts) > 0 and (new_contact := next(iter(contacts))) != self.last_contact:
+                self.state *= -1
+                self.last_contact = new_contact
+                print(contacts)
 
         elif len(self.robots) == 1:
             if pos.x >= self.target_distance and vel.x > 0:
@@ -189,6 +209,7 @@ class BackAndForthFitnessData(FitnessData):
                 new_vel = - max(2., vel.length) * vel.normalized
                 self.state = -1
             else:
+                changed_direction = (self.vel.x * vel.x < 0)
                 if self.__debug and pos.x <= 0 and vel.x <= 0:
                     new_vel = self.velocity * u
                     self.state = 1
@@ -197,11 +218,35 @@ class BackAndForthFitnessData(FitnessData):
 
         if self.state != old_state:
             self.exchanges += 1
-            # print(">> New state:", self.state)
+            print(">> New state:", self.state)
 
         if new_vel != vel:
             self.set_ball_velocity(data, new_vel)
             # print(">> New vel:", new_vel)
+
+        if self.render:
+            self.u, self.v = u, v
+
+        self.pos, self.vel = pos, vel
+
+    def pre_render(self, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
+        p3d = Vector3([*self.pos, 0])
+        mat = Quaternion.from_y_rotation(math.pi/2).matrix33
+        u, v = self.u, self.v
+        if u is not None:
+            mat *= Quaternion.from_z_rotation(theta=math.atan2(u[1], u[0]))
+        args = dict(
+            pos=p3d,
+            type=mujoco.mjtGeom.mjGEOM_ARROW,
+            size=[.005, .005, 1],
+            mat=mat,
+            rgba=[0, 1, 0, .5]
+        )
+        viewer._viewer_backend.add_marker(**args)
+        mat = mat * Quaternion.from_z_rotation(math.pi/2)
+        args["mat"] = mat
+        args["rgba"] = [1, 0, 0, .5]
+        viewer._viewer_backend.add_marker(**args)
 
 
 class Evaluator(Eval):
@@ -366,13 +411,15 @@ class Evaluator(Eval):
             fd_class = BackAndForthFitnessData
         else:
             fd_class = FitnessData
-        fd = fd_class(robots, objects)
+        fd = fd_class(robots, objects, render=not options.headless)
 
         if config.experiment in [ExperimentType.PUNCH_THRICE,
                                  ExperimentType.PUNCH_TOGETHER]:
             simulator.register_callback(Callback.START, fd.start)
             simulator.register_callback(Callback.PRE_STEP, fd.before_step)
             simulator.register_callback(Callback.POST_STEP, fd.after_step)
+            if not options.headless:
+                simulator.register_callback(Callback.RENDER, fd.pre_render)
 
         # Simulate all scenes.
         scene_states = simulate_scenes(
