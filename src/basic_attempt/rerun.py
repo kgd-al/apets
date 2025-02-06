@@ -37,6 +37,10 @@ def main() -> None:
                         help="Render the genotype to file with provided"
                              " extension (or png)",
                         const="png", default=None)
+    parser.add_argument("--no-performance-compare", default=False,
+                        action="store_true",
+                        help="Disable performance comparison (because you do"
+                             " not care about determinism)")
 
     options = parser.parse_args(namespace=Options())
 
@@ -72,9 +76,10 @@ def main() -> None:
         if options.movie:
             Evaluator.rename_movie(file)
 
-        if performance_compare(EvaluationResult(fitness, stats),
-                               result,
-                               verbosity=2):
+        if (not options.no_performance_compare and
+                performance_compare(EvaluationResult(fitness, stats),
+                                    result,
+                                    verbosity=2)):
             logging.error(f"Re-evaluation gave different results")
     except Exception as e:
         print("Stuff did not work:", e)

@@ -20,6 +20,8 @@ if [ $update -gt 0 ]
 then
   mv -v .requirements requirements.txt
   line
+else
+  rm .requirements
 fi
 
 update apets src scripts requirements.txt

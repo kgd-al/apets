@@ -12,7 +12,7 @@ from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal
 
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
-from pyrr import Vector3
+from pyrr import Vector3, Quaternion
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
@@ -59,9 +59,12 @@ Y_OFFSET = .25
 
 def robot_position(config: Config):
     if config.centered_ball:
-        return vec(0, 0, 0)
+        p = vec(0, 0, 0)
     else:
-        return vec(-X_OFFSET, Y_OFFSET, 0)
+        p = vec(-X_OFFSET, Y_OFFSET, 0)
+    if config.experiment is ExperimentType.PUNCH_TOGETHER:
+        p.x -= 1
+    return p
 
 
 def ball_position(config: Config, r: float):
@@ -71,7 +74,9 @@ def ball_position(config: Config, r: float):
                ExperimentType.PUNCH_THRICE, ExperimentType.PUNCH_TOGETHER]:
         x = 2 * X_OFFSET if config.centered_ball else 0
     elif exp in [ExperimentType.PUNCH_BACK]:
-        x = 5
+        x = 2
+    if exp is ExperimentType.PUNCH_TOGETHER:
+        x -= 1
     return vec(x, 0, r)
 
 
@@ -98,7 +103,8 @@ class BackAndForthFitnessData(FitnessData):
     # __magic_bullet_ball_pos = slice(-7, -5)
     __magic_bullet_ball_vel = slice(-6, -4)
 
-    __velocity = 10.
+    velocity = 10.
+    target_distance = 2
 
     __debug = False
 
@@ -134,7 +140,7 @@ class BackAndForthFitnessData(FitnessData):
         robot1 = (
             self._2d_pos(data, self.robots_id[1])
             if len(self.robots) > 1 else
-            Vector2([5, 0])
+            Vector2([self.target_distance, 0])
         )
         return robot0, robot1
 
@@ -172,17 +178,19 @@ class BackAndForthFitnessData(FitnessData):
         self.fitness += self.exchanges * delta_pos.dot(u) - abs(delta_pos.dot(v))
 
         # Check if we changed state (and if we need to punch the ball)
-        if not self.__debug and len(self.robots) == 2 and changed_direction:
-            self.state = math.copysign(1, vel.x)
+        if len(self.robots) == 2 and changed_direction:
+            if not self.__debug:
+                self.state = math.copysign(1, vel.x)
 
         elif len(self.robots) == 1:
-            if pos.x >= 5 and vel.x > 0:
+            if pos.x >= self.target_distance and vel.x > 0:
                 # new_vel = -vel
-                new_vel = self.__velocity * (p0 - b).normalized
+                # new_vel = vel.length * (p0 - b).normalized
+                new_vel = - max(2., vel.length) * vel.normalized
                 self.state = -1
             else:
                 if self.__debug and pos.x <= 0 and vel.x <= 0:
-                    new_vel = self.__velocity * u
+                    new_vel = self.velocity * u
                     self.state = 1
                 elif not self.__debug and vel.x > 0 and changed_direction:
                     self.state = 1
@@ -258,7 +266,7 @@ class Evaluator(Eval):
         )
 
         terrain = terrains.flat(
-            size=Vector2([20, 20]),
+            size=Vector2([8, 8]),
             texture=Texture(
                 # base_color=Color(128, 128, 196, 255),
                 reference=TextureReference(
@@ -272,7 +280,8 @@ class Evaluator(Eval):
                 map_type=MapType.MAP2D
             ))
 
-        robots = [genotype.develop(config)]
+        robots = [genotype.develop(config)
+                  for _ in range(1 + (config.experiment is ExperimentType.PUNCH_TOGETHER))]
 
         if options.rerun:
             controller: ABrainInstance = robots[0].brain.make_instance()
@@ -282,14 +291,21 @@ class Evaluator(Eval):
 
         # Create the scenes.
         scene = ModularRobotScene(terrain=terrain)
-        for robot in robots:
+        for i, robot in enumerate(robots):
             pose = Pose(position=robot_position(config))
+            if i > 0:
+                pose.position = Vector3([
+                    -pose.position.x,
+                    -pose.position.y,
+                    pose.position.z,
+                ])
+                pose.orientation = pose.orientation * Quaternion.from_eulers([math.pi, 0, 0])
             scene.add_robot(robot, pose)
 
             if options.rerun:
                 scene.add_site(
                     parent=None,
-                    name="robot_start", pos=pose.position,
+                    name=f"robot_start_{i}", pos=pose.position,
                     size=[.1, .1, .005],
                     rgba=[.1, 0., 0, 1.],
                     type="ellipsoid"
@@ -324,23 +340,36 @@ class Evaluator(Eval):
                 pos=[camera_position(config.experiment), 0, 1]
             )
 
-            for i in range(5):
-                scene.add_site(
-                    parent=None,
-                    name=f"mark_{i + 1}m",
-                    pos=[i + 1, 0, 0],
-                    size=[.005, .02, .0001],
-                    rgba=[1, 1, 1, 1],
-                    type="box"
-                )
+            # for i in range(5):
+            #     scene.add_site(
+            #         parent=None,
+            #         name=f"mark_{i + 1}m",
+            #         pos=[i + 1, 0, 0],
+            #         size=[.005, .02, .0001],
+            #         rgba=[1, 1, 1, 1],
+            #         type="box"
+            #     )
 
-        if config.experiment in [ExperimentType.PUNCH_THRICE]:
+        if config.experiment in [ExperimentType.PUNCH_BACK,
+                                 ExperimentType.PUNCH_THRICE]:
+            scene.add_site(
+                parent=None,
+                name="puncher",
+                pos=[BackAndForthFitnessData.target_distance, 0, .075],
+                size=[.075, .075, .075],
+                rgba=[1., 0., 0., .5],
+                type="box"
+            )
+
+        if config.experiment in [ExperimentType.PUNCH_THRICE,
+                                 ExperimentType.PUNCH_TOGETHER]:
             fd_class = BackAndForthFitnessData
         else:
             fd_class = FitnessData
         fd = fd_class(robots, objects)
 
-        if config.experiment in [ExperimentType.PUNCH_THRICE]:
+        if config.experiment in [ExperimentType.PUNCH_THRICE,
+                                 ExperimentType.PUNCH_TOGETHER]:
             simulator.register_callback(Callback.START, fd.start)
             simulator.register_callback(Callback.PRE_STEP, fd.before_step)
             simulator.register_callback(Callback.POST_STEP, fd.after_step)
@@ -396,7 +425,7 @@ class Evaluator(Eval):
 
         states = fd.states
         i = int(.8*(len(states)-1))
-        pos = _robot_pos(robot, states)
+        pos = _robot_pos(robot, fd)
         return (
                 .01 * euclidian_distance(pos(0), pos(i-1))
                 + euclidian_distance(pos(i), pos(-1))
@@ -441,18 +470,28 @@ class Evaluator(Eval):
 
     @staticmethod
     def fitness_punch_thrice(fd: BackAndForthFitnessData):
-        robot, ball = single_robot_and_ball(fd)
         if fd.fitness == 0:
+            robot, ball = single_robot_and_ball(fd)
             return -100-euclidian_distance(_ball_pos(ball, fd)(-1),
                                            _robot_pos(robot, fd)(-1))
         else:
             return fd.fitness
 
+    @classmethod
+    def fitness_punch_together(cls, fd: BackAndForthFitnessData):
+        if fd.fitness == 0:
+            robots, ball = robots_and_ball(fd, n=2)
+            return -100-min(
+                euclidian_distance(_ball_pos(ball, fd)(-1),
+                                   _robot_pos(r, fd)(-1))
+                for r in robots)
+        else:
+            return fd.fitness
+
     @staticmethod
     def push_ball(model: MjModel, data: MjData,
-                  abstraction: AbstractionToMujocoMapping,
-                  velocity=10):
-        data.qvel[-6] -= [velocity]
+                  abstraction: AbstractionToMujocoMapping):
+        data.qvel[-6] -= [BackAndForthFitnessData.velocity]
 
 
 def single_robot_and_ball(fd: FitnessData):
@@ -462,6 +501,15 @@ def single_robot_and_ball(fd: FitnessData):
     ball = fd.objects[0]
     assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
     return robot, ball
+
+
+def robots_and_ball(fd: FitnessData, n=2):
+    assert len(fd.robots) == n, f"This experiment is meant for {n} robots."
+    robots = fd.robots[0:n]
+    assert len(fd.objects) == 1, "This experiment requires a single object."
+    ball = fd.objects[0]
+    assert isinstance(ball, Ball), "This experiment's interactive object should be a Ball."
+    return robots, ball
 
 
 def clip(low, value, high): return max(low, min(value, high))
