@@ -86,16 +86,17 @@ class Genotype:
         """
 
         body = self.develop_body(config)
-        brain = self.develop_brain(body=body)
+        brain = self.develop_brain(body=body, config=config)
         return ModularRobot(body=body, brain=brain)
 
     def develop_body(self, config: Config) -> BodyV2:
         return DefaultBodyPlan.develop(self.body,
                                        inputs=config.cppn_body_inputs,
-                                       outputs=config.cppn_body_outputs)
+                                       outputs=config.cppn_body_outputs,
+                                       camera=config.camera)
 
-    def develop_brain(self, body: BodyV2) -> Brain:
-        return develop_brain(self.brain, body)
+    def develop_brain(self, body: BodyV2, config: Config) -> Brain:
+        return develop_brain(self.brain, body, camera=config.camera)
 
     @staticmethod
     def distance(lhs: 'Genotype', rhs: 'Genotype') -> float:

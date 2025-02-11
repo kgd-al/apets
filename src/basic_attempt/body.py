@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from queue import Queue
 from random import Random
-from typing import Any, List, Union, Tuple
+from typing import Any, List, Union, Tuple, Optional
 
 import numpy as np
 from abrain import Genome, CPPN
@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from pyrr import Quaternion, Vector3
 from revolve2.modular_robot.body import AttachmentPoint, Module, RightAngles
 from revolve2.modular_robot.body.base import Body
-from revolve2.modular_robot.body.sensors import ActiveHingeSensor
+from revolve2.modular_robot.body.sensors import ActiveHingeSensor, CameraSensor
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV2
 from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
 from revolve2.simulation.scene import _aabb, Pose
@@ -449,7 +449,9 @@ def gecko_body() -> BodyV2:
 
 class DefaultBodyPlan(__BodyPlan):
     @classmethod
-    def develop(cls, genotype: Genome, inputs: str, outputs: str) -> BodyV2:
+    def develop(cls, genotype: Genome,
+                inputs: str, outputs: str,
+                camera: Optional[Tuple[int, int]]) -> BodyV2:
         # return empty_body()
         # return torso_body()
         # return gecko_body()
@@ -521,6 +523,13 @@ class DefaultBodyPlan(__BodyPlan):
                         child.id = part_count
                         to_explore.append(child)
                         part_count += 1
+
+        if camera is not None:
+            body.core_v2.front_face.add_sensor(CameraSensor(
+                position=Vector3([0, 0, 0]),
+                orientation=Quaternion(),
+                camera_size=camera
+            ))
 
             # print("== Module processed ====")
         return body

@@ -85,12 +85,14 @@ def ball_position(config: Config, r: float):
 
 
 def camera_position(exp: ExperimentType):
+    pos = [0, 0, 1]
     if exp in [ExperimentType.LOCOMOTION, ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
-        return -1
+        pos[0] = -1
     elif exp in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
-        return -2
+        pos[0] = -2
     elif exp in [ExperimentType.PUNCH_TOGETHER]:
-        return -5
+        pos[1] = 3
+    return pos
 
 
 class FitnessData:
@@ -200,7 +202,7 @@ class BackAndForthFitnessData(FitnessData):
             if len(contacts) > 0 and (new_contact := next(iter(contacts))) != self.last_contact:
                 self.state *= -1
                 self.last_contact = new_contact
-                print(contacts)
+                # print(contacts)
 
         elif len(self.robots) == 1:
             if pos.x >= self.target_distance and vel.x > 0:
@@ -218,7 +220,7 @@ class BackAndForthFitnessData(FitnessData):
 
         if self.state != old_state:
             self.exchanges += 1
-            print(">> New state:", self.state)
+            # print(">> New state:", self.state)
 
         if new_vel != vel:
             self.set_ball_velocity(data, new_vel)
@@ -382,7 +384,7 @@ class Evaluator(Eval):
                 name="tracking-camera",
                 mode="targetbody",
                 target=f"mbs{len(robots)+len(objects)}/",
-                pos=[camera_position(config.experiment), 0, 1]
+                pos=camera_position(config.experiment)
             )
 
             # for i in range(5):

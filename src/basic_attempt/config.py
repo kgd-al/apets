@@ -1,7 +1,7 @@
 """Configuration parameters for this example."""
 from dataclasses import dataclass
 from enum import auto
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Tuple
 
 from strenum import UppercaseStrEnum
 
@@ -43,3 +43,6 @@ class Config(NEATConfig):
     cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
     cppn_body_outputs: Annotated[str, "Outputs computed by the body's CPPN"] = "b,a"
 
+    vision: Annotated[Optional[Tuple[int, int]],
+                      ("Resolution of the front-facing camera "
+                       "or None for no vision")] = None

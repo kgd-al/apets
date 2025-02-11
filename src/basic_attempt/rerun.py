@@ -56,6 +56,9 @@ def main() -> None:
     config, static_data = get_config(file)
     config.data_root = file.parent
 
+    logging.warning("Forcing use of a camera")
+    config.camera = (6, 4)
+
     if options.experiment is not None and config.experiment != options.experiment:
         logging.info(f"Evaluating on {options.experiment} instead of {config.experiment}")
         config.experiment = options.experiment

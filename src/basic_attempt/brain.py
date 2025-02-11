@@ -1,7 +1,7 @@
 import logging
 import pprint
 from random import Random
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 from abrain import Genome, Point3D as Point, ANN3D as ANN
@@ -12,6 +12,7 @@ from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 from body import compute_positions
+from _retina_mapping import x_aligned as retina_mapper
 
 
 class ABrainInstance(BrainInstance):
@@ -47,6 +48,8 @@ class ABrainInstance(BrainInstance):
     def control(self, dt: float,
                 sensor_state: ModularRobotSensorState,
                 control_interface: ModularRobotControlInterface) -> None:
+
+        print(sensor_state.get_camera_sensor_state())
 
         if self.__brain_dead:
             return
@@ -90,7 +93,8 @@ class ABrainInstance(BrainInstance):
 
 
 class ABrainFactory(BrainFactory):
-    def __init__(self, dna: Genome, body: Body, with_labels=False):
+    def __init__(self, dna: Genome, body: Body,
+                 with_labels=False, camera: Optional[Tuple[int, int]] = None):
         logging.debug(f"Creating a brain factory for {dna.id()}")
         self._dna = dna
         self._labels = {} if with_labels else None
@@ -110,9 +114,6 @@ class ABrainFactory(BrainFactory):
         if len(h_coords) > 0:
             np.quantile([c.tolist() for c in h_coords.values()],
                         [0, 1], axis=0, out=bounds)
-
-        # if bounds[0][2] != bounds[1][2]:
-        #     raise NotImplementedError("Can only handle planar robots (with z=0 for all modules)")
 
         x_min, x_max = bounds[0][0], bounds[1][0]
         xrange = max(abs(x_min), abs(x_max)) or 1
@@ -166,18 +167,18 @@ class ABrainFactory(BrainFactory):
             if with_labels:
                 self._labels[ip] = f"P{i}"
                 self._labels[op] = f"M{i}"
-        #
-        # if self.brain_dna.with_vision():
-        #     mapper = retina_mapper()
-        #     w, h = self.brain_dna.vision
-        #     for j in range(h):
-        #         for i in range(w):
-        #             for k, c in enumerate("RGB"):
-        #                 p = mapper(i, j, k, w, h)
-        #                 inputs.append(p)
-        #
-        #                 if self.with_labels:
-        #                     labels[p] = f"{c}[{i},{j}]"
+
+        if camera is not None:
+            mapper = retina_mapper()
+            w, h = camera
+            for j in range(h):
+                for i in range(w):
+                    for k, c in enumerate("RGB"):
+                        p = mapper(i, j, k, w, h)
+                        self._inputs.append(p)
+
+                        if with_labels:
+                            self._labels[p] = f"{c}[{i},{j}]"
 
         # Ensure no duplicates
         try:
@@ -203,5 +204,5 @@ class ABrainFactory(BrainFactory):
         return c
 
 
-def develop(genome: Genome, body: Body, with_labels=False):
-    return ABrainFactory(genome, body, with_labels)
+def develop(genome: Genome, body: Body, with_labels=False, camera=False):
+    return ABrainFactory(genome, body, with_labels, camera)
