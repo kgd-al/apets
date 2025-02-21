@@ -78,7 +78,7 @@ class Genotype:
         brain.update_lineage(data.brain, [lhs.brain, rhs.brain])
         return Genotype(body, brain)
 
-    def develop(self, config: Config) -> ModularRobot:
+    def develop(self, config: Config, with_labels=False, _id: int = 0) -> ModularRobot:
         """
         Develop the genotype into a modular robot.
 
@@ -86,17 +86,18 @@ class Genotype:
         """
 
         body = self.develop_body(config)
-        brain = self.develop_brain(body=body, config=config)
+        brain = self.develop_brain(body=body, config=config, with_labels=with_labels, _id=_id)
         return ModularRobot(body=body, brain=brain)
 
     def develop_body(self, config: Config) -> BodyV2:
         return DefaultBodyPlan.develop(self.body,
                                        inputs=config.cppn_body_inputs,
                                        outputs=config.cppn_body_outputs,
-                                       camera=config.camera)
+                                       camera=config.vision)
 
-    def develop_brain(self, body: BodyV2, config: Config) -> Brain:
-        return develop_brain(self.brain, body, camera=config.camera)
+    def develop_brain(self, body: BodyV2, config: Config, with_labels = False, _id: int = 0) -> Brain:
+        return develop_brain(self.brain, body, _id=_id,
+                             with_labels=with_labels)
 
     @staticmethod
     def distance(lhs: 'Genotype', rhs: 'Genotype') -> float:

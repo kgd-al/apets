@@ -523,15 +523,14 @@ class DefaultBodyPlan(__BodyPlan):
                         child.id = part_count
                         to_explore.append(child)
                         part_count += 1
+            # print("== Module processed ====")
 
         if camera is not None:
-            body.core_v2.front_face.add_sensor(CameraSensor(
-                position=Vector3([0, 0, 0]),
+            body.core_v2.add_sensor(CameraSensor(
+                position=Vector3([0.075, 0, 0.07]),
                 orientation=Quaternion(),
                 camera_size=camera
             ))
-
-            # print("== Module processed ====")
         return body
 
     @classmethod

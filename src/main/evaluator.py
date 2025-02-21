@@ -8,12 +8,15 @@ import os
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal
+from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal, List
 
 import mujoco
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
 from pyrr import Vector3, Quaternion, Matrix33
+
+import abrain.core.ann
+from abrain.core.ann import ANNMonitor
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body import Module
 from revolve2.modular_robot.body.base import AttachmentFace
@@ -22,6 +25,7 @@ from revolve2.modular_robot_simulation import (
     ModularRobotScene,
     simulate_scenes,
 )
+from revolve2.modular_robot_simulation._modular_robot_simulation_handler import ModularRobotSimulationHandler
 from revolve2.simulation.scene import Pose, Color, UUIDKey
 from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
 from revolve2.simulation.scene.vector2 import Vector2
@@ -52,6 +56,8 @@ class Options(ConfigBase):
     file: Annotated[Optional[Path], "Path to the genome under re-evaluation."] = None
     duration: Annotated[Optional[int], ("Simulation duration in seconds."
                                         " Overwrites the value used in evolution")] = None
+
+    ann_dynamics: Annotated[bool, "Whether to record precise dynamics of the neural network"] = False
 
 
 def vec(x, y, z): return Vector3([x, y, z], dtype=float)
@@ -157,10 +163,11 @@ class BackAndForthFitnessData(FitnessData):
         return robot0, robot1
 
     def start(self, model: MjModel, data: MjData,
-              mapping: AbstractionToMujocoMapping):
+              mapping: AbstractionToMujocoMapping,
+              handler: ModularRobotSimulationHandler):
         self.mapping = mapping
         self.ball_id = mapping.multi_body_system[UUIDKey(self.objects[0])].id
-        # Ugly but working (with a single robot)
+        # Ugly but working (with two(?) robots)
         i = 2
         self.robots_ix = []
         for r in self.robots:
@@ -251,6 +258,37 @@ class BackAndForthFitnessData(FitnessData):
         viewer._viewer_backend.add_marker(**args)
 
 
+class DynamicsMonitor:
+    def __init__(self, path: Path, dt: float):
+        self.path, self.dt = path, dt
+        self.monitors: List[ANNMonitor] = []
+        print(self.dt)
+
+    def start(self, model: MjModel, data: MjData,
+              mapping: AbstractionToMujocoMapping,
+              handler: ModularRobotSimulationHandler):
+
+        def path(_i):
+            p = self.path.with_suffix("")
+            if len(handler._brains) > 1:
+                p = p.joinpath(f"brain_{_i}")
+            return p
+
+        self.monitors = [
+            ANNMonitor(ann=b.brain, labels=b.labels, folder=path(i), dt=self.dt)
+            for i, (b, _) in enumerate(handler._brains)
+        ]
+
+    def step(self, model: MjModel, data: MjData):
+        for monitor in self.monitors:
+            monitor.step()
+
+    def end(self, model: MjModel, data: MjData):
+        self.step(model, data)
+        for monitor in self.monitors:
+            monitor.close()
+
+
 class Evaluator(Eval):
     """Provides evaluation of robots."""
 
@@ -305,6 +343,9 @@ class Evaluator(Eval):
 
         config, options = cls.config, cls.options
 
+        batch_parameters = make_standard_batch_parameters(
+                simulation_time=options.duration or config.simulation_duration)
+
         simulator = LocalSimulator(
             headless=options.headless,
             num_simulators=1,
@@ -327,14 +368,23 @@ class Evaluator(Eval):
                 map_type=MapType.MAP2D
             ))
 
-        robots = [genotype.develop(config)
-                  for _ in range(1 + (config.experiment is ExperimentType.PUNCH_TOGETHER))]
+        ann_labels = options.ann_dynamics or options.rerun
+
+        robots = [genotype.develop(config, with_labels=ann_labels, _id=i)
+                  for i in range(1 + (config.experiment is ExperimentType.PUNCH_TOGETHER))]
+
+        if options.ann_dynamics:
+            dynamics_monitor = DynamicsMonitor(options.file, 1/batch_parameters.control_frequency)
+            simulator.register_callback(Callback.START, dynamics_monitor.start)
+            simulator.register_callback(Callback.POST_CONTROL, dynamics_monitor.step)
+            simulator.register_callback(Callback.END, dynamics_monitor.end)
 
         if options.rerun:
-            controller: ABrainInstance = robots[0].brain.make_instance()
-            brain: ANN3D = controller.brain
-            if not brain.empty():
-                brain.render3D().write_html(config.data_root.joinpath("brain.html"))
+            def write_brain(model, data, mapping, handler):
+                brain: ANN3D = handler._brains[0][0].brain
+                if not brain.empty():
+                    brain.render3D().write_html(config.data_root.joinpath("brain.html"))
+            simulator.register_callback(Callback.START, write_brain)
 
         # Create the scenes.
         scene = ModularRobotScene(terrain=terrain)
@@ -350,6 +400,21 @@ class Evaluator(Eval):
             scene.add_robot(robot, pose)
 
             if options.rerun:
+                scene.add_site(
+                    parent=f"mbs{i+1}", parent_tag="attachment_frame",
+                    name=f"robot_fwd_stem", pos=[0, 0, 0.075],
+                    size=[.05, .005, .001],
+                    rgba=[.5, 0, 0, 1],
+                    type="box"
+                )
+                scene.add_site(
+                    parent=f"mbs{i+1}", parent_tag="attachment_frame",
+                    name=f"robot_fwd_head", pos=[0.05, 0, 0.075], quat=Quaternion.from_x_rotation(math.pi / 4),
+                    size=[.01, .01, .001],
+                    rgba=[.5, 0, 0, 1],
+                    type="box"
+                )
+
                 scene.add_site(
                     parent=None,
                     name=f"robot_start_{i}", pos=pose.position,
@@ -387,16 +452,6 @@ class Evaluator(Eval):
                 pos=camera_position(config.experiment)
             )
 
-            # for i in range(5):
-            #     scene.add_site(
-            #         parent=None,
-            #         name=f"mark_{i + 1}m",
-            #         pos=[i + 1, 0, 0],
-            #         size=[.005, .02, .0001],
-            #         rgba=[1, 1, 1, 1],
-            #         type="box"
-            #     )
-
         if config.experiment in [ExperimentType.PUNCH_BACK,
                                  ExperimentType.PUNCH_THRICE]:
             scene.add_site(
@@ -426,9 +481,7 @@ class Evaluator(Eval):
         # Simulate all scenes.
         scene_states = simulate_scenes(
             simulator=simulator,
-            batch_parameters=make_standard_batch_parameters(
-                simulation_time=options.duration or config.simulation_duration,
-            ),
+            batch_parameters=batch_parameters,
             scenes=scene,
             record_settings=(
                 None
@@ -539,7 +592,8 @@ class Evaluator(Eval):
 
     @staticmethod
     def push_ball(model: MjModel, data: MjData,
-                  abstraction: AbstractionToMujocoMapping):
+                  mapping: AbstractionToMujocoMapping,
+                  handler: ModularRobotSimulationHandler):
         data.qvel[-6] -= [BackAndForthFitnessData.velocity]
 
 

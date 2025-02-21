@@ -1,52 +1,64 @@
-import logging
-import math
+#!/bin/env python3
 
 import numpy as np
 from matplotlib import pyplot as plt
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap, to_rgba
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.pyplot import colormaps
 from seaborn import heatmap
-from seaborn_image import imshow
 
 n = 64
 annot = False
 
+tested_colormaps = ["Manual", "hsv", "viridis", "inferno", "Greys", "Purples", "Blues", "Greens", "Oranges", "Reds"]
+
 data = [
     [(r, g, b, 1) for r, g, b in [
-        [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1], [0, 0, 0], [.5, .5, .5]
+        [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1], [0, 0, 0], [.5, .5, .5],
+        [1, .9, .9], [.9, 1, .9], [.9, .9, 1], [.9, .7, .7], [.7, .9, .7], [.7, .7, .9]
     ]],
     *[colormaps[cm](np.linspace(0, 1, n))
-      for cm in ["hsv", "hot"]]
+      for cm in tested_colormaps if cm != "Manual"],
 ]
+a = .25
 mappings = [
     ("Lossy", lambda r, g, b: -1 * r + g),
-    ("Better", lambda r, g, b: -1 * r + max(g, b)),
+    # ("Better", lambda r, g, b: -1 * r + max(g, b)),
     ("Non-ternary", lambda r, g, b: max(-1, min(-r + g - .33 * b, 1))),
+    ("Better?", lambda r, g, b: max(-1, min(- 2 * r + 1.5 * g + .25 * b, 1))),
+    # ("Better?", lambda r, g, b: max(-1, min(- r + g - a*(1 - max(r, g, b) + min(r, g, b)) * max(r, g, b), 1))),
 ]
-
-samples = len(data[0])+(len(data)-1)*n
-fig, axes_arr = plt.subplots(nrows=len(mappings)+1, ncols=len(data), sharex=False, sharey=False,
-                             figsize=[.5*samples, .8*len(mappings)],
-                             width_ratios=[len(data[i])/samples for i in range(len(data))])
-
-
-def plot(_axes, _name, map_fn, plot_fn, **kwargs):
-    for i, ax in enumerate(_axes):
-        plot_fn(map_fn(data[i]), **kwargs, ax=ax)
-    _axes[0].text(-0.01, 0.5, _name, va="center", ha="right", transform=_axes[0].transAxes)
-
-
-plot(axes_arr[0], "Truth", lambda _l: [_l], imshow, cbar=False)
 
 cmap = LinearSegmentedColormap.from_list("vision", [[1, 0, 0], [0, 0, 0], [0, 1, 0]])
 
-for axes, (name, mapping) in zip(axes_arr[1:], mappings):
-    plot(axes, name, lambda l: [[mapping(r, g, b) for r, g, b, _ in l]], heatmap,
-         cmap=cmap, annot=annot, cbar=False, vmin=-1, vmax=1)
-    for i, _ax in enumerate(axes):
-        _ax.set_xticks([])
-        _ax.set_yticks([])
-        _ax.set_aspect("equal")
+with PdfPages("color_mappings.pdf") as pdf:
+    for name, mapping in mappings:
+        fig = plt.figure(figsize=[6, 2 * len(data)])
+        outer_grid = GridSpec(nrows=2*len(data), ncols=1, hspace=.5)
 
-fig.tight_layout()
-fig.show()
+        for i, colors in enumerate(data):
+            #     for ax, (name, _) in zip(axes, [("Truth", None)] + mappings):
+            #         ax.text(0.5, 1.05, name, va="bottom", ha="center", transform=ax.transAxes)
+
+            inner_grid = GridSpecFromSubplotSpec(nrows=2, ncols=1, subplot_spec=outer_grid[i],
+                                                 hspace=0.1)
+            ax0, ax1 = axes = [plt.subplot(cell) for cell in inner_grid]
+            ax0.imshow([colors], aspect="auto")
+
+            ax0.text(0.5, 1.05, tested_colormaps[i], va="bottom", ha="center", transform=ax0.transAxes)
+            ax0.text(-0.01, .5, "Truth", va="center", ha="right", transform=ax0.transAxes)
+            ax1.text(-0.01, .5, name, va="center", ha="right", transform=ax1.transAxes)
+
+            heatmap(
+                [[mapping(r, g, b) for r, g, b, _ in colors]],
+                ax=ax1,
+                cmap=cmap, annot=(i == 0) or annot, cbar=False, vmin=-1, vmax=1,
+                annot_kws={"fontsize": 8}
+            )
+            for _ax in axes:
+                _ax.set_xticks([])
+                _ax.set_yticks([])
+                # _ax.set_aspect("equal")
+
+        pdf.savefig(fig, bbox_inches="tight")

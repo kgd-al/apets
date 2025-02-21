@@ -33,3 +33,11 @@ def z_aligned():
         -1 + .1,
         2 * (h * k + j) / (3 * h - 1) - 1
     )
+
+
+def ternary_1d():
+    return lambda i, j, w, h: Point(
+        2 * i / (w - 1) - 1,
+        -1 + .1,
+        2 * j / (h - 1) - 1
+    )

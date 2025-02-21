@@ -3,28 +3,50 @@ import pprint
 from random import Random
 from typing import List, Tuple, Optional
 
+import cv2
 import numpy as np
 from abrain import Genome, Point3D as Point, ANN3D as ANN
 from revolve2.modular_robot import ModularRobotControlInterface
 from revolve2.modular_robot.body.base import Body, ActiveHinge
+from revolve2.modular_robot.body.sensors import CameraSensor
 from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 from body import compute_positions
-from _retina_mapping import x_aligned as retina_mapper
+from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_mapper_rg
+
+
+@np.vectorize(otypes=[float], signature='(n)->()')
+def rg_colormap(arr):
+    b, g, r = arr / 255
+    # c = max(-1, min(-r + g - .33 * b, 1))
+    c = max(-1, min(- 2 * r + 1.5 * g + .25 * b, 1))
+    # print(f"BGR: {b} {g} {r} -> {c}\t{arr}")
+    # assert -1 <= c <= 1
+    return c
+
+
+@np.vectorize(otypes=[np.uint8], signature='()->(n)')
+def rg_to_rgb_inverse(c):
+    arr = np.array([-round(255*min(c, 0)), round(255*max(c, 0)), 0], dtype=np.uint8)
+    # print(f"C: {c} -> {arr}")
+    return arr
 
 
 class ABrainInstance(BrainInstance):
     def __init__(self, genome: Genome,
                  inputs: List[Point], outputs: List[Point],
-                 mapping: List[Tuple[ActiveHinge, int]]):
-        self.id = genome.id()
+                 hinges: List[Tuple[ActiveHinge, int]],
+                 camera: Optional[CameraSensor],
+                 _id: int):
+        self.id = (genome.id(), _id)
         self.brain = ANN.build(inputs, outputs, genome)
         self.i_buffer, self.o_buffer = self.brain.buffers()
-        self._mapping = mapping
+        self._hinges = hinges
+        self._camera = camera
 
-        self._step = 0
+        self._step, self._time = 0, 0
         logging.debug(f"Created a brain instance for {genome.id()}")
 
         # logging.warning(f"[kgd-debug:{self.id}] brain={pprint.pformat(self.brain.to_json(), width=200)}")
@@ -43,35 +65,44 @@ class ABrainInstance(BrainInstance):
     def reset(self):
         logging.debug(f"Reset brain instance {self.id}")
         self.brain.reset()
-        self._step = 0
+        self._step, self._time = 0, 0
 
     def control(self, dt: float,
                 sensor_state: ModularRobotSensorState,
                 control_interface: ModularRobotControlInterface) -> None:
 
-        print(sensor_state.get_camera_sensor_state())
-
         if self.__brain_dead:
             return
 
-        hinge_sensors = len(self._mapping)
-        hinges = [0] * hinge_sensors
-        for hinge, i in self._mapping:
+        n_hinges = len(self._hinges)
+        hinges = [0] * n_hinges
+        for hinge, i in self._hinges:
             hinges[i] = sensor_state.get_active_hinge_sensor_state(
                 hinge.sensors.active_hinge_sensor).position
 
         # print(f"[kgd-debug:{self.id}] {hinges=}")
-        self.i_buffer[:hinge_sensors] = hinges
+        self.i_buffer[:n_hinges] = hinges
 
-        # if self.vision is not None:
+        if self._camera is not None:
+            img = sensor_state.get_camera_sensor_state(self._camera).image
+            img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}.png"
+            cv2.imwrite(img_file, np.flipud(img)[:, :, ::-1])
+            print("Wrote", img_file)
+
+            img = rg_colormap(img)
+
+            img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}_rg.png"
+            cv2.imwrite(img_file, np.flipud(rg_to_rgb_inverse(img))[:, :, ::-1])
+            print("Wrote", img_file)
         #     if Config.debug_retina_brain > 1:
         #         img = self._debug_retina_image()
         #         self.vision.img = img
         #     else:
         #         img = self.vision.process(data.model, data.data)
-        #     self.i_buffer[off:] = [x / 255 for x in img.flat]
+            self.i_buffer[n_hinges:] = [x for x in img.flat]
 
         self._step += 1
+        self._time += dt
 
         # inputs_str = "[" + ", ".join(f"{i:.3g}" for i in self.i_buffer) + "]"
         # logging.warning(f"[kgd-debug:{self.id}] inputs={inputs_str}")
@@ -85,7 +116,7 @@ class ABrainInstance(BrainInstance):
             self.o_buffer[:] = [self.rng.random() * 2 - 1
                                 for _ in range(len(self.o_buffer))]
 
-        for hinge, o_index in self._mapping:
+        for hinge, o_index in self._hinges:
             control_interface.set_active_hinge_target(
                 hinge, self.o_buffer[o_index] * hinge.range)
 
@@ -94,11 +125,17 @@ class ABrainInstance(BrainInstance):
 
 class ABrainFactory(BrainFactory):
     def __init__(self, dna: Genome, body: Body,
-                 with_labels=False, camera: Optional[Tuple[int, int]] = None):
+                 with_labels=False, _id: int = 0):
         logging.debug(f"Creating a brain factory for {dna.id()}")
         self._dna = dna
         self._labels = {} if with_labels else None
-        self._inputs, self._outputs, self._mapping = [], [], []
+        self._inputs, self._outputs = [], []
+        self._hinges_mapping = []
+        self._id = _id
+
+        cameras = body.find_sensors_of_type(CameraSensor)
+        assert 0 <= len(cameras) <= 1, "Sorry, cannot work with multiple cameras"
+        self._camera = cameras[0] if len(cameras) > 0 else None
 
         h_coords = {m: p for m, p in compute_positions(body).items()
                     if isinstance(m, ActiveHinge)}
@@ -162,23 +199,32 @@ class ABrainFactory(BrainFactory):
             self._inputs.append(ip)
             op = Point(p[1], 1 - y, p[0])
             self._outputs.append(op)
-            self._mapping.append((hinge, i))
+            self._hinges_mapping.append((hinge, i))
 
             if with_labels:
                 self._labels[ip] = f"P{i}"
                 self._labels[op] = f"M{i}"
 
-        if camera is not None:
-            mapper = retina_mapper()
-            w, h = camera
+        if self._camera is not None:
+            # mapper = retina_mapper()
+            # w, h = self._camera.camera_size
+            # for j in range(h):
+            #     for i in range(w):
+            #         for k, c in enumerate("RGB"):
+            #             p = mapper(i, j, k, w, h)
+            #             self._inputs.append(p)
+            #
+            #             if with_labels:
+            #                 self._labels[p] = f"{c}[{i},{j}]"
+            mapper = retina_mapper_rg()
+            w, h = self._camera.camera_size
             for j in range(h):
                 for i in range(w):
-                    for k, c in enumerate("RGB"):
-                        p = mapper(i, j, k, w, h)
-                        self._inputs.append(p)
+                    p = mapper(i, j, w, h)
+                    self._inputs.append(p)
 
-                        if with_labels:
-                            self._labels[p] = f"{c}[{i},{j}]"
+                    if with_labels:
+                        self._labels[p] = f"V[{i},{j}]"
 
         # Ensure no duplicates
         try:
@@ -196,7 +242,8 @@ class ABrainFactory(BrainFactory):
     def make_instance(self) -> ABrainInstance:
         c = ABrainInstance(self._dna,
                            self._inputs, self._outputs,
-                           self._mapping)
+                           self._hinges_mapping, self._camera,
+                           self._id)
 
         if self._labels:
             c.labels = self._labels
@@ -204,5 +251,5 @@ class ABrainFactory(BrainFactory):
         return c
 
 
-def develop(genome: Genome, body: Body, with_labels=False, camera=False):
-    return ABrainFactory(genome, body, with_labels, camera)
+def develop(genome: Genome, body: Body, with_labels=False, _id: int = 0):
+    return ABrainFactory(genome, body, with_labels, _id)
