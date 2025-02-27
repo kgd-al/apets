@@ -40,7 +40,8 @@ do
 
   slurm_err=$slurm_base.err
   [ ! -f $slurm_base.err ] && slurm_err=$folder/slurm.err
-  if [ $(grep -v -e "libEGL warning" -e '^$' $slurm_err | wc -l) -gt 0 ]
+#   if [ $(grep -v -e "GLFWError" -e '^$' $slurm_err | wc -l) -gt 0 ]
+  if [ $(cat $slurm_err | wc -l) -gt 0 ]
   then
     errors_str="$errors_str\033[31m$name\033[0m $(cat $slurm_err)\n"
     continue
@@ -61,10 +62,10 @@ do
     running_str="${running_str}header|${header}ETA\n"
   fi
 
-  evo=$(tac $folder/log | grep -m 1 '[[]EVO' | cut -c 43- | tr -s ' ' '|')
+  evo=$(tac $folder/log | grep -m 1 '[[]EVO' | cut -c 43- | awk -vOFS="|" '{$1=$1;print}')
   if [ -n "$evo" ]
   then
-    running_str="$running_str\033[${state}m$name|\033[0m$evo"
+    running_str="$running_str\033[${state}m$name\033[0m|$evo"
 
     if [ -n "$completed" ]
     then
@@ -72,9 +73,14 @@ do
     else
       elapsed=$(($(date +%s) - $(stat -c "%W" $folder/log)))
       curr_gen=$(cut -d '|' -f1 <<< $evo)
-      target_gen=$(jq .config.generations $folder/evolution.json)
-      eta=$(awk '{ print $2 ? $1 * ($3 - $2)/$2 : "inf" }' <<< "$elapsed $curr_gen $target_gen")
-      eta=$(pretty_time $eta)
+      if [ -f $folder/evolution.json ]
+      then
+        target_gen=$(jq .config.generations $folder/evolution.json)
+        eta=$(awk '{ print $2 ? $1 * ($3 - $2)/$2 : "inf" }' <<< "$elapsed $curr_gen $target_gen")
+        eta=$(pretty_time $eta)
+      else
+        eta="N/A"
+      fi
     fi
 
     running_str="$running_str|\033[${state}m$eta\033[0m\n"

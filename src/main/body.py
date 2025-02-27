@@ -506,7 +506,7 @@ class DefaultBodyPlan(__BodyPlan):
             module = to_explore.pop(0)
 
             attachments = module.module_reference.attachment_points.items()
-            for attachment_point_tuple in rng().sample(attachments,
+            for attachment_point_tuple in rng().sample(list(attachments),
                                                        k=len(attachments)):
             # for attachment_point_tuple in attachments:
                 # if _DEBUG:

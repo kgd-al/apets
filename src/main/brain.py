@@ -85,15 +85,19 @@ class ABrainInstance(BrainInstance):
 
         if self._camera is not None:
             img = sensor_state.get_camera_sensor_state(self._camera).image
-            img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}.png"
-            cv2.imwrite(img_file, np.flipud(img)[:, :, ::-1])
-            print("Wrote", img_file)
+
+            __debug_img = False
+            if __debug_img:
+                img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}.png"
+                cv2.imwrite(img_file, np.flipud(img)[:, :, ::-1])
+                print("Wrote", img_file)
 
             img = rg_colormap(img)
 
-            img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}_rg.png"
-            cv2.imwrite(img_file, np.flipud(rg_to_rgb_inverse(img))[:, :, ::-1])
-            print("Wrote", img_file)
+            if __debug_img:
+                img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}_rg.png"
+                cv2.imwrite(img_file, np.flipud(rg_to_rgb_inverse(img))[:, :, ::-1])
+                print("Wrote", img_file)
         #     if Config.debug_retina_brain > 1:
         #         img = self._debug_retina_image()
         #         self.vision.img = img

@@ -1,10 +1,11 @@
 """Main script for the example."""
+import os
+os.environ.pop('DISPLAY', None)
 
+import functools
 import argparse
 import math
-import pprint
 import time
-from dataclasses import fields
 from datetime import timedelta
 
 import humanize
@@ -26,6 +27,9 @@ def main(config: Config) -> None:
         data = Genotype.Data(config, config.seed)
         evolver = Evolver(config,
                           evaluator=Evaluator.evaluate,
+                          process_initializer=functools.partial(
+                              Evaluator.initialize,
+                              config=config, options=None),
                           genotype_interface=Genotype.neat_interface(data))
         Evaluator.initialize(config=config, options=None)
 

@@ -1,5 +1,4 @@
 """Evaluator class."""
-import functools
 import json
 import logging
 import math
@@ -10,16 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal, List
 
+import glfw
 import mujoco
+import yaml
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
-from pyrr import Vector3, Quaternion, Matrix33
+from mujoco_viewer import MujocoViewer
+from pyrr import Vector3, Quaternion
 
-import abrain.core.ann
+from abrain import ANN3D
 from abrain.core.ann import ANNMonitor
+from abrain.neat.config import ConfigBase
+from abrain.neat.evolver import EvaluationResult
+from config import Config, ExperimentType, EXPERIMENT_DURATIONS
+from genotype import Genotype
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
-from revolve2.modular_robot.body import Module
-from revolve2.modular_robot.body.base import AttachmentFace
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
@@ -29,7 +33,7 @@ from revolve2.modular_robot_simulation._modular_robot_simulation_handler import 
 from revolve2.simulation.scene import Pose, Color, UUIDKey
 from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
 from revolve2.simulation.scene.vector2 import Vector2
-from revolve2.simulation.simulator import RecordSettings, Viewer
+from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
@@ -37,13 +41,6 @@ from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
 from revolve2.standards import terrains
 from revolve2.standards.interactive_objects import Ball
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
-
-from abrain import ANN3D
-from abrain.neat.config import ConfigBase
-from abrain.neat.evolver import EvaluationResult
-from brain import ABrainInstance
-from config import Config, ExperimentType, EXPERIMENT_DURATIONS
-from genotype import Genotype
 
 
 @dataclass
@@ -289,6 +286,66 @@ class DynamicsMonitor:
             monitor.close()
 
 
+class MultiCameraOverlay:
+    @staticmethod
+    def process(model: MjModel, data: MjData, viewer: 'CustomMujocoViewer'):
+        print("Processing")
+
+
+class PersistentViewerOptions:
+    @classmethod
+    def persistent_storage(cls, viewer):
+        path = cls.backend(viewer).CONFIG_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @classmethod
+    def backend(cls, viewer) -> MujocoViewer:
+        backend = viewer._viewer_backend
+        assert isinstance(backend, MujocoViewer)
+        return backend
+
+    @classmethod
+    def window(cls, viewer):
+        return cls.backend(viewer).window
+
+    @classmethod
+    def start(cls, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
+        backend = cls.backend(viewer)
+
+        backend.original_close = backend.close
+        def monkey_patch():
+            cls.end(viewer)
+            backend.original_close()
+        backend.close = monkey_patch
+
+        try:
+            with open(cls.persistent_storage(viewer), "r") as f:
+                if (config := yaml.safe_load(f)) is not None:
+                    # print("[kgd-debug] restored viewer config: ", config)
+                    window = PersistentViewerOptions.window(viewer)
+                    glfw.restore_window(window)
+                    glfw.set_window_pos(window, *config["pos"])
+                    glfw.set_window_size(window, *config["size"])
+
+        except FileNotFoundError:
+            pass
+
+    @classmethod
+    def end(cls, viewer: CustomMujocoViewer):
+        if not cls.backend(viewer).is_alive:
+            return
+        with open(cls.persistent_storage(viewer), "w") as f:
+            window = cls.window(viewer)
+            yaml.safe_dump(
+                dict(
+                    pos=glfw.get_window_pos(window),
+                    size=glfw.get_window_size(window),
+                ),
+                f
+            )
+
+
 class Evaluator(Eval):
     """Provides evaluation of robots."""
 
@@ -304,15 +361,6 @@ class Evaluator(Eval):
 
         options = options or Options(headless=True)
         cls.options = options
-        # if options.rerun:
-        #     options.rerun = False
-        #     config.num_simulators = None
-        #     options.headless = True
-
-        if options.rerun:
-            config.threads = 1
-        elif config.threads is None:
-            config.threads = len(os.sched_getaffinity(0))
 
         if config.simulation_duration is None:
             if options.rerun and options.duration is not None:
@@ -378,6 +426,11 @@ class Evaluator(Eval):
             simulator.register_callback(Callback.START, dynamics_monitor.start)
             simulator.register_callback(Callback.POST_CONTROL, dynamics_monitor.step)
             simulator.register_callback(Callback.END, dynamics_monitor.end)
+
+        if not options.headless:
+            simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
+            if config.vision is not None:
+                simulator.register_callback(Callback.RENDER, MultiCameraOverlay.process)
 
         if options.rerun:
             def write_brain(model, data, mapping, handler):
@@ -579,8 +632,8 @@ class Evaluator(Eval):
         else:
             return fd.fitness
 
-    @classmethod
-    def fitness_punch_together(cls, fd: BackAndForthFitnessData):
+    @staticmethod
+    def fitness_punch_together(fd: BackAndForthFitnessData):
         if fd.fitness == 0:
             robots, ball = robots_and_ball(fd, n=2)
             return -100-min(

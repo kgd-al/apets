@@ -27,16 +27,18 @@ job_name=apets-$name
 
 slurm_logs_base="$slurm_logs/run-%a"
 
+echo "Requested duration: $SLURM_DURATION"
+
 sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #!/bin/bash
 
 #SBATCH --job-name=$job_name
-#SBATCH --partition=batch
+#SBATCH --partition=${SLURM_PARTITION:-batch}
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --array=$seeds
-#SBATCH --time=10:00:00               # Maximum runtime (D-HH:MM:SS)
+#SBATCH --time=${SLURM_DURATION:-10:00:00}
 
 source ~/code/venv/bin/activate
 
@@ -48,9 +50,8 @@ echo "Seed is \$seed"
 echo "Saving data to \$data_folder"
 echo "Additional arguments: $@"
 
-#xvfb-run
 export MUJOCO_GL=egl
-python src/basic_attempt/main.py --overwrite False --seed \$seed --data-root \$data_folder $@
+python src/main/main.py --overwrite False --seed \$seed --data-root \$data_folder $@
 
 for ext in out err
 do
