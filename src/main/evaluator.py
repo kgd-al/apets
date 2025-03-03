@@ -259,7 +259,6 @@ class DynamicsMonitor:
     def __init__(self, path: Path, dt: float):
         self.path, self.dt = path, dt
         self.monitors: List[ANNMonitor] = []
-        print(self.dt)
 
     def start(self, model: MjModel, data: MjData,
               mapping: AbstractionToMujocoMapping,
