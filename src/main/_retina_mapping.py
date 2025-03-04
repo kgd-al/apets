@@ -38,6 +38,6 @@ def z_aligned():
 def ternary_1d():
     return lambda i, j, w, h: Point(
         2 * i / (w - 1) - 1,
-        -1 + .1,
+        -.9,
         2 * j / (h - 1) - 1
     )

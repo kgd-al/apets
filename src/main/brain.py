@@ -17,6 +17,9 @@ from body import compute_positions
 from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_mapper_rg
 
 
+DEBUG_IO_NEURONS_MAPPING = True
+
+
 @np.vectorize(otypes=[float], signature='(n)->()')
 def rg_colormap(arr):
     b, g, r = arr / 255
@@ -198,7 +201,7 @@ class ABrainFactory(BrainFactory):
         #                     " Patching with small variations.")
 
         for i, (hinge, p) in enumerate(hinges_pos.items()):
-            y = .05 * (p[2] + 1)
+            y = .025 * (p[2] + 1)
             ip = Point(p[1], -1 + y, p[0])
             self._inputs.append(ip)
             op = Point(p[1], 1 - y, p[0])
@@ -208,6 +211,11 @@ class ABrainFactory(BrainFactory):
             if with_labels:
                 self._labels[ip] = f"P{i}"
                 self._labels[op] = f"M{i}"
+
+            if DEBUG_IO_NEURONS_MAPPING:
+                print(f"[kgd-debug] Hinge({i,}, {p=})")
+                print(f"             > {ip=}")
+                print(f"             > {op=}")
 
         if self._camera is not None:
             # mapper = retina_mapper()
@@ -229,6 +237,9 @@ class ABrainFactory(BrainFactory):
 
                     if with_labels:
                         self._labels[p] = f"V[{i},{j}]"
+
+                    if DEBUG_IO_NEURONS_MAPPING:
+                        print(f"[kgd-debug] Pixel({i}, {j}) -> {p}")
 
         # Ensure no duplicates
         try:

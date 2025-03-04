@@ -31,9 +31,7 @@ duration=${SLURM_DURATION:-10:00:00}
 threads=${THREADS:-32}
 partition=${SLURM_PARTITION:-batch}
 
-echo "Running on partition $partition"
-echo "        with $threads threads"
-echo "        for $duration"
+printf "Running $name[$seeds] on partition $partition with $threads threads for $duration -> "
 
 sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #!/bin/bash
@@ -46,10 +44,16 @@ sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #SBATCH --array=$seeds
 #SBATCH --time=$duration
 
-source ~/code/venv/bin/activate
-
 seed=\$SLURM_ARRAY_TASK_ID
 data_folder=$data_root$name/run-\$seed
+
+if [ -n "$SILENT_SKIP_EXISTING" ] && [ -d "\$data_folder" ]
+then
+  echo "Folder \$data_folder already exists. Silently aborting"
+  exit 0
+fi
+
+source ~/code/venv/bin/activate
 
 date
 echo "Seed is \$seed"

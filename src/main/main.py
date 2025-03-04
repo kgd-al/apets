@@ -59,32 +59,31 @@ def main(config: Config) -> None:
                 best_robot = evolver.champion
                 best_robot_path = save()
 
-    if False:
-        evolver.generate_plots(ext="png", options=dict())
+    evolver.generate_plots(ext="png", options=dict())
 
-        champion = config.data_root.joinpath("champion.json")
-        champion.symlink_to(best_robot_path.name)
+    champion = config.data_root.joinpath("champion.json")
+    champion.symlink_to(best_robot_path.name)
 
-        if dot_found:
-            best_robot.genome.to_dot(champion, "png", data)
+    if dot_found:
+        best_robot.genome.to_dot(champion, "png", data)
 
-        config.num_simulators = 1
-        Evaluator.initialize(
-            config=config, options=Options(
-                rerun=True,
-                movie=True,
-                headless=True
-            ), verbose=False)
-        reeval_results = Evaluator.evaluate(best_robot.genome)
+    config.num_simulators = 1
+    Evaluator.initialize(
+        config=config, options=Options(
+            rerun=True,
+            movie=True,
+            headless=True
+        ), verbose=False)
+    reeval_results = Evaluator.evaluate(best_robot.genome)
 
-        Evaluator.rename_movie(champion)
+    Evaluator.rename_movie(champion)
 
-        if performance_compare(reeval_results,
-                               EvaluationResult(best_robot.fitness, best_robot.stats),
-                               verbosity=0):
-            config.logger.error(f"Re-evaluation gave different results")
-        else:
-            config.logger.info(f"Optimal fitness: {reeval_results.fitness}")
+    if performance_compare(reeval_results,
+                           EvaluationResult(best_robot.fitness, best_robot.stats),
+                           verbosity=0):
+        config.logger.error(f"Re-evaluation gave different results")
+    else:
+        config.logger.info(f"Optimal fitness: {reeval_results.fitness}")
 
     duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start_time))
     config.logger.info(f"Completed evolution in {duration}")

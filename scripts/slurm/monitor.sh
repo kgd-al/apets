@@ -35,7 +35,6 @@ do
   if [ -n "$errors" ]
   then
     errors_str="$errors_str\033[31m$name\033[0m $errors\n"
-    continue
   fi
 
   slurm_err=$slurm_base.err
@@ -43,8 +42,7 @@ do
 #   if [ $(grep -v -e "GLFWError" -e '^$' $slurm_err | wc -l) -gt 0 ]
   if [ $(cat $slurm_err | wc -l) -gt 0 ]
   then
-    errors_str="$errors_str\033[31m$name\033[0m $(cat $slurm_err)\n"
-    continue
+    errors_str="$errors_str\033[31m$name\033[0m $(head -n 1 $slurm_err)\n"
   fi
 
   state=33

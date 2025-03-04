@@ -27,16 +27,18 @@ from revolve2.experimentation.evolution.abstract_elements import Evaluator as Ev
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
-    simulate_scenes,
+    simulate_scenes, Terrain,
 )
 from revolve2.modular_robot_simulation._modular_robot_simulation_handler import ModularRobotSimulationHandler
-from revolve2.simulation.scene import Pose, Color, UUIDKey
+from revolve2.simulation.scene import Pose, Color, UUIDKey, AABB
+from revolve2.simulation.scene.geometry import GeometryBox, GeometryPlane
 from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
 from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
+from revolve2.simulators.mujoco_simulator.textures import Flat, Gradient, Checker
 from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
 from revolve2.standards import terrains
 from revolve2.standards.interactive_objects import Ball
@@ -58,6 +60,49 @@ class Options(ConfigBase):
 
 
 def vec(x, y, z): return Vector3([x, y, z], dtype=float)
+
+
+def make_custom_terrain() -> Terrain:
+    # terrain = terrains.flat(
+    #     size=Vector2([8, 8]),
+    #     texture=Texture(
+    #         # base_color=Color(128, 128, 196, 255),
+    #         reference=TextureReference(
+    #             builtin="checker"
+    #         ),
+    #         base_color=Color(255, 255, 255, 255),
+    #         primary_color=Color(128, 128, 160, 255),
+    #         secondary_color=Color(64, 64, 80, 255),
+    #         repeat=(2, 2),
+    #         size=(1024, 1024),
+    #         map_type=MapType.MAP2D
+    #     ))
+    s = 8
+    return Terrain(
+        static_geometry=[
+            GeometryPlane(
+                pose=Pose(position=Vector3(), orientation=Quaternion()),
+                mass=0.0,
+                size=Vector3([2*s, 2*s, 0]),
+                texture=Checker(
+                    primary_color=Color(128, 128, 160, 255),
+                    secondary_color=Color(64, 64, 80, 255),
+                    map_type=MapType.MAP2D,
+                    repeat=(2, 2),
+                    size=(1024, 1024)
+                ),
+            )
+        ] + [
+            GeometryBox(
+                pose=Pose(position=Vector3([x*s, y*s, .5]),
+                          orientation=Quaternion.from_z_rotation(math.pi*r)),
+                mass=0.0,
+                texture=Flat(primary_color=Color(96, 96, 120, 255)),
+                aabb=AABB(size=Vector3([.1, 2*s - .1, 1])),
+            )
+            for x, y, r in [(1, 0, 0), (0, 1, .5), (-1, 0, 1), (0, -1, 1.5)]
+        ]
+    )
 
 
 X_OFFSET = .25
@@ -107,6 +152,14 @@ class FitnessData:
     def update(self, **kwargs):
         self.__dict__.update(kwargs)
 
+    @staticmethod
+    def _2d_pos(data: MjData, obj_id: int):
+        return Vector2(data.xpos[obj_id][:2].copy())
+
+    @staticmethod
+    def _2d_vel(data: MjData, obj_id: int):
+        return Vector2(data.cvel[obj_id][3:5].copy())
+
 
 class BackAndForthFitnessData(FitnessData):
     # __magic_bullet_ball_pos = slice(-7, -5)
@@ -117,7 +170,7 @@ class BackAndForthFitnessData(FitnessData):
 
     __debug = False
 
-    def __init__(self, robots, objects, state: Literal[-1, 1] = 1, render=False):
+    def __init__(self, robots, objects, render=False):
         super().__init__(robots, objects)
 
         self.mapping: Optional[AbstractionToMujocoMapping] = None
@@ -134,14 +187,6 @@ class BackAndForthFitnessData(FitnessData):
         if render:
             self.p = None
             self.u, self.v = None, None
-
-    @staticmethod
-    def _2d_pos(data: MjData, obj_id: int):
-        return Vector2(data.xpos[obj_id][:2].copy())
-
-    @staticmethod
-    def _2d_vel(data: MjData, obj_id: int):
-        return Vector2(data.cvel[obj_id][3:5].copy())
 
     def ball_pos_and_vel(self, data: MjData):
         bid = self.ball_id
@@ -255,6 +300,15 @@ class BackAndForthFitnessData(FitnessData):
         viewer._viewer_backend.add_marker(**args)
 
 
+class FollowFitnessData(FitnessData):
+    def __init__(self, robots, objects, **kwargs):
+        super().__init__(robots, objects, **kwargs)
+
+
+class PunchFollowFitnessData(FitnessData):
+    def __init__(self, robots, objects, **kwargs):
+        super().__init__(robots, objects, **kwargs)
+
 class DynamicsMonitor:
     def __init__(self, path: Path, dt: float):
         self.path, self.dt = path, dt
@@ -288,7 +342,8 @@ class DynamicsMonitor:
 class MultiCameraOverlay:
     @staticmethod
     def process(model: MjModel, data: MjData, viewer: 'CustomMujocoViewer'):
-        print("Processing")
+        # print("Processing")
+        pass
 
 
 class PersistentViewerOptions:
@@ -400,20 +455,7 @@ class Evaluator(Eval):
             # viewer_type="native"
         )
 
-        terrain = terrains.flat(
-            size=Vector2([8, 8]),
-            texture=Texture(
-                # base_color=Color(128, 128, 196, 255),
-                reference=TextureReference(
-                    builtin="checker"
-                ),
-                base_color=Color(255, 255, 255, 255),
-                primary_color=Color(128, 128, 160, 255),
-                secondary_color=Color(64, 64, 80, 255),
-                repeat=(2, 2),
-                size=(1024, 1024),
-                map_type=MapType.MAP2D
-            ))
+        terrain = make_custom_terrain()
 
         ann_labels = options.ann_dynamics or options.rerun
 
@@ -476,7 +518,8 @@ class Evaluator(Eval):
                 )
 
         objects = []
-        if config.experiment is not ExperimentType.LOCOMOTION:
+        if config.experiment not in [ExperimentType.LOCOMOTION,
+                                     ExperimentType.FOLLOW]:
             r = .05
             pose = Pose(ball_position(config, r))
             ball = Ball(radius=r, mass=0.05, pose=pose,
@@ -504,6 +547,13 @@ class Evaluator(Eval):
                 pos=camera_position(config.experiment)
             )
 
+        if config.experiment is ExperimentType.FOLLOW:
+            scene.add_body(
+                parent=None,
+                name="human",
+                mocap=True
+            )
+
         if config.experiment in [ExperimentType.PUNCH_BACK,
                                  ExperimentType.PUNCH_THRICE]:
             scene.add_site(
@@ -518,6 +568,10 @@ class Evaluator(Eval):
         if config.experiment in [ExperimentType.PUNCH_THRICE,
                                  ExperimentType.PUNCH_TOGETHER]:
             fd_class = BackAndForthFitnessData
+        elif config.experiment is ExperimentType.FOLLOW:
+            fd_class = FollowFitnessData
+        elif config.experiment is ExperimentType.PUNCH_FOLLOW:
+            fd_class = PunchFollowFitnessData
         else:
             fd_class = FitnessData
         fd = fd_class(robots, objects, render=not options.headless)
@@ -641,6 +695,14 @@ class Evaluator(Eval):
                 for r in robots)
         else:
             return fd.fitness
+
+    @staticmethod
+    def fitness_follow(fd: FollowFitnessData):
+        return fd.fitness
+
+    @staticmethod
+    def fitness_punch_follow(fd: PunchFollowFitnessData):
+        return fd.fitness
 
     @staticmethod
     def push_ball(model: MjModel, data: MjData,

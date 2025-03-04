@@ -33,6 +33,8 @@ declare -A durations=(
  [PUNCH_TOGETHER-vision]=100:00:00
 )
 
+export SILENT_SKIP_EXISTING=1
+
 for vision in None 6,4
 do
     vflag=""
