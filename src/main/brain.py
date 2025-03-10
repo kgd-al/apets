@@ -17,7 +17,7 @@ from body import compute_positions
 from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_mapper_rg
 
 
-DEBUG_IO_NEURONS_MAPPING = True
+DEBUG_IO_NEURONS_MAPPING = False
 
 
 @np.vectorize(otypes=[float], signature='(n)->()')

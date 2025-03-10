@@ -3,19 +3,22 @@ import json
 import logging
 import math
 import numbers
-import os
 import pprint
 from dataclasses import dataclass
+from enum import auto
 from pathlib import Path
-from typing import Optional, Annotated, ClassVar, Dict, Callable, Literal, List
+from typing import Optional, Annotated, ClassVar, Dict, Callable, List
 
+import cv2
 import glfw
 import mujoco
+import numpy as np
 import yaml
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
 from mujoco_viewer import MujocoViewer
 from pyrr import Vector3, Quaternion
+from strenum import StrEnum
 
 from abrain import ANN3D
 from abrain.core.ann import ANNMonitor
@@ -32,15 +35,15 @@ from revolve2.modular_robot_simulation import (
 from revolve2.modular_robot_simulation._modular_robot_simulation_handler import ModularRobotSimulationHandler
 from revolve2.simulation.scene import Pose, Color, UUIDKey, AABB
 from revolve2.simulation.scene.geometry import GeometryBox, GeometryPlane
-from revolve2.simulation.scene.geometry.textures import Texture, MapType, TextureReference
+from revolve2.simulation.scene.geometry.textures import Texture, MapType
 from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulation.simulator._simulator import Callback
 from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
-from revolve2.simulators.mujoco_simulator.textures import Flat, Gradient, Checker
+from revolve2.simulators.mujoco_simulator.textures import Flat, Checker
 from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
-from revolve2.standards import terrains
+from revolve2.simulators.mujoco_simulator.viewers._custom_mujoco_viewer import _MujocoViewerBackend
 from revolve2.standards.interactive_objects import Ball
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
 
@@ -110,12 +113,15 @@ Y_OFFSET = .25
 
 
 def robot_position(config: Config):
-    if config.centered_ball:
+    if config.experiment in [ExperimentType.FOLLOW, ExperimentType.PUNCH_FOLLOW]:
         p = vec(0, 0, 0)
     else:
-        p = vec(-X_OFFSET, Y_OFFSET, 0)
-    if config.experiment is ExperimentType.PUNCH_TOGETHER:
-        p.x -= 1
+        if config.centered_ball:
+            p = vec(0, 0, 0)
+        else:
+            p = vec(-X_OFFSET, Y_OFFSET, 0)
+        if config.experiment is ExperimentType.PUNCH_TOGETHER:
+            p.x -= 1
     return p
 
 
@@ -134,7 +140,8 @@ def ball_position(config: Config, r: float):
 
 def camera_position(exp: ExperimentType):
     pos = [0, 0, 1]
-    if exp in [ExperimentType.LOCOMOTION, ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
+    if exp in [ExperimentType.LOCOMOTION, ExperimentType.FOLLOW, ExperimentType.PUNCH_FOLLOW,
+               ExperimentType.PUNCH_ONCE, ExperimentType.PUNCH_AHEAD]:
         pos[0] = -1
     elif exp in [ExperimentType.PUNCH_BACK, ExperimentType.PUNCH_THRICE]:
         pos[0] = -2
@@ -309,6 +316,7 @@ class PunchFollowFitnessData(FitnessData):
     def __init__(self, robots, objects, **kwargs):
         super().__init__(robots, objects, **kwargs)
 
+
 class DynamicsMonitor:
     def __init__(self, path: Path, dt: float):
         self.path, self.dt = path, dt
@@ -340,10 +348,110 @@ class DynamicsMonitor:
 
 
 class MultiCameraOverlay:
-    @staticmethod
-    def process(model: MjModel, data: MjData, viewer: 'CustomMujocoViewer'):
-        # print("Processing")
-        pass
+    class Mode(StrEnum):
+        PRETTY_RGB = auto()
+        RGB = auto()
+        PRETTY = auto()
+        ACCURATE = auto()
+
+    PRETTY_CAMERA_WIDTH_RATIO = .25
+
+    def __init__(self, vision):
+        self.viewer = None
+        self.cameras = None
+        self.vision = vision
+        self.mode = self.Mode.PRETTY_RGB
+
+        self.vopt, self.scene, self.ctx = None, None, None
+
+        self.step = 0
+        self.camera_buffer, self.window_buffer = np.zeros(shape=(*vision, 3)), np.zeros(0)
+
+    def start(self, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
+        self.viewer = viewer
+        self.cameras = []
+
+        for name_index in model.name_camadr:
+            terminator = model.names.find(b'\x00', name_index)
+            name = model.names[name_index:terminator].decode("ascii")
+            if "mbs" in name:
+                camera = mujoco.MjvCamera()
+                camera.fixedcamid = model.camera(name).id
+                camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
+                self.cameras.append(camera)
+
+        if len(self.cameras) > 0:
+            # create options, camera, scene, context
+            self.vopt = mujoco.MjvOption()
+            self.scene = mujoco.MjvScene(model, maxgeom=10000)
+
+            self.ctx = mujoco.MjrContext(model, mujoco.mjtFontScale.mjFONTSCALE_150.value)
+
+            viewer._viewer_backend.add_callback(
+                mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT,
+                "Camera inset",
+                glfw.KEY_PAGE_UP,
+                lambda: self.mode.name.capitalize().replace("_", " "),
+                self.next_mode
+            )
+
+        self.step = 0
+
+    def next_mode(self):
+        modes = list(self.Mode)
+        index = modes.index(self.mode) + 1
+        print(f"{self.mode} -> {modes}[{index}]")
+        if index >= len(modes):
+            index = 0
+        self.mode = modes[index]
+        print(f">>", self.mode)
+
+    def process(self, model: MjModel, data: MjData, viewer: _MujocoViewerBackend):
+        if not viewer.is_alive:
+            return
+
+        vw, vh = self.vision
+        width, height = viewer.viewport.width, viewer.viewport.height
+        for camera in self.cameras:
+            inset_width = int(width * self.PRETTY_CAMERA_WIDTH_RATIO)
+            inset_height = int(inset_width * vh / vw)
+            if "PRETTY" in self.mode.name:
+                camera_width, camera_height = inset_width, inset_height
+            else:
+                camera_width, camera_height = self.vision
+
+            mujoco.mjv_updateScene(model, data, self.vopt, None, camera, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
+
+            viewport = mujoco.MjrRect(width - inset_width, height - inset_height, inset_width, inset_height)
+            mujoco.mjr_rectangle(mujoco.MjrRect(viewport.left - 1, viewport.bottom - 1,
+                                                viewport.width + 2, viewport.height + 2),
+                                 1, 0, 0, 1)
+            mujoco.mjr_render(viewport, self.scene, self.ctx)
+            if "RGB" not in self.mode.name:  # View has been rendered, now draw over it with colormapping
+                if self.mode is self.Mode.PRETTY:
+                    size = camera_width * camera_height * 3
+                    if len(self.window_buffer) != size:
+                        self.window_buffer = np.ones(shape=size, dtype=np.uint8)
+                    buffer = self.window_buffer
+                elif self.mode is self.Mode.ACCURATE:
+                    buffer = self.camera_buffer
+                else:
+                    raise ValueError(f"Unknown mode: {self.mode.name}")
+
+                mujoco.mjr_readPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
+                if self.mode is self.Mode.ACCURATE:
+                    print("1")
+                    cv2.imwrite("foo.png", np.flipud(buffer.reshape((camera_height, camera_width, 3))[:, :, ::-1]))
+                    print("2")
+                    buffer = cv2.resize(buffer, (inset_width, inset_height)).flatten()
+                    print("3")
+                    cv2.imwrite("foo2.png", np.flipud(buffer.reshape((inset_height, inset_width, 3))[:, :, ::-1]))
+                    print("4")
+
+                print(buffer.shape, viewport.width * viewport.height*3)
+                mujoco.mjr_drawPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
+
+        self.step += 1
 
 
 class PersistentViewerOptions:
@@ -471,7 +579,9 @@ class Evaluator(Eval):
         if not options.headless:
             simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
             if config.vision is not None:
-                simulator.register_callback(Callback.RENDER, MultiCameraOverlay.process)
+                multiview = MultiCameraOverlay(config.vision)
+                simulator.register_callback(Callback.RENDER_START, multiview.start)
+                simulator.register_callback(Callback.POST_RENDER, multiview.process)
 
         if options.rerun:
             def write_brain(model, data, mapping, handler):
@@ -582,7 +692,7 @@ class Evaluator(Eval):
             simulator.register_callback(Callback.PRE_STEP, fd.before_step)
             simulator.register_callback(Callback.POST_STEP, fd.after_step)
             if not options.headless:
-                simulator.register_callback(Callback.RENDER, fd.pre_render)
+                simulator.register_callback(Callback.PRE_RENDER, fd.pre_render)
 
         # Simulate all scenes.
         scene_states = simulate_scenes(
