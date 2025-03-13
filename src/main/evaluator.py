@@ -452,6 +452,7 @@ class MultiCameraOverlay:
                 mujoco.mjr_drawPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
 
         self.step += 1
+        print(self.step)
 
 
 class PersistentViewerOptions:
