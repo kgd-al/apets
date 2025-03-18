@@ -452,7 +452,7 @@ class MultiCameraOverlay:
                 mujoco.mjr_drawPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
 
         self.step += 1
-        print(self.step)
+        print("[kgd-debug]", f"{self.step=}")
 
 
 class PersistentViewerOptions:
@@ -561,7 +561,7 @@ class Evaluator(Eval):
             headless=options.headless,
             num_simulators=1,
             start_paused=options.start_paused,
-            # viewer_type="native"
+            viewer_type="custom"
         )
 
         terrain = make_custom_terrain()
