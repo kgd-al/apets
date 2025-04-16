@@ -1,3 +1,4 @@
+import functools
 import logging
 import pprint
 from random import Random
@@ -20,7 +21,6 @@ from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_m
 DEBUG_IO_NEURONS_MAPPING = False
 
 
-@np.vectorize(otypes=[float], signature='(n)->()')
 def rg_colormap(arr):
     b, g, r = arr / 255
     # c = max(-1, min(-r + g - .33 * b, 1))
@@ -30,14 +30,37 @@ def rg_colormap(arr):
     return c
 
 
-@np.vectorize(otypes=[np.uint8], signature='()->(n)')
 def rg_to_rgb_inverse(c):
     arr = np.array([-round(255*min(c, 0)), round(255*max(c, 0)), 0], dtype=np.uint8)
     # print(f"C: {c} -> {arr}")
     return arr
 
 
+def apply_colormap(src, cm):
+    w, h = src.shape[0], src.shape[1]
+    dst = np.zeros(shape=(w, h, 1), dtype=src.dtype)
+    for i in range(w):
+        for j in range(h):
+            dst[i, j] = cm(src[i, j, :])
+    return dst
+
+
+def colormap_two_ways(src, cm, cm_inv):
+    dst = src.copy()
+    w, h = src.shape[0], src.shape[1]
+    for i in range(w):
+        for j in range(h):
+            dst[i, j, :] = cm_inv(cm(src[i, j, :]))
+    # dst2 = src / 255
+    # dst2 = max(-1, min(1, -2 * src[:, :, 2] + 1.5 * src[:, :, 1] + .25 * src[:, :, 0]))
+    # assert dst == dst2
+    return dst
+
+
 class ABrainInstance(BrainInstance):
+    forward_colormap = functools.partial(apply_colormap, cm=rg_colormap)
+    inverse_colormap = functools.partial(colormap_two_ways, cm=rg_colormap, cm_inv=rg_to_rgb_inverse)
+
     def __init__(self, genome: Genome,
                  inputs: List[Point], outputs: List[Point],
                  hinges: List[Tuple[ActiveHinge, int]],
@@ -89,24 +112,24 @@ class ABrainInstance(BrainInstance):
         if self._camera is not None:
             img = sensor_state.get_camera_sensor_state(self._camera).image
 
-            __debug_img = False
+            __debug_img = True
             if __debug_img:
                 img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}.png"
                 cv2.imwrite(img_file, np.flipud(img)[:, :, ::-1])
                 print("Wrote", img_file)
 
-            img = rg_colormap(img)
+            cm_img = self.forward_colormap(img)
 
             if __debug_img:
                 img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}_rg.png"
-                cv2.imwrite(img_file, np.flipud(rg_to_rgb_inverse(img))[:, :, ::-1])
+                cv2.imwrite(img_file, np.flipud(self.inverse_colormap(img))[:, :, ::-1])
                 print("Wrote", img_file)
         #     if Config.debug_retina_brain > 1:
         #         img = self._debug_retina_image()
         #         self.vision.img = img
         #     else:
         #         img = self.vision.process(data.model, data.data)
-            self.i_buffer[n_hinges:] = [x for x in img.flat]
+            self.i_buffer[n_hinges:] = [x for x in cm_img.flat]
 
         self._step += 1
         self._time += dt

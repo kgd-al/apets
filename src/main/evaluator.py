@@ -4,6 +4,7 @@ import logging
 import math
 import numbers
 import pprint
+import time
 from dataclasses import dataclass
 from enum import auto
 from pathlib import Path
@@ -26,6 +27,7 @@ from abrain.neat.config import ConfigBase
 from abrain.neat.evolver import EvaluationResult
 from config import Config, ExperimentType, EXPERIMENT_DURATIONS
 from genotype import Genotype
+from brain import ABrainInstance
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BrickV2
 from revolve2.modular_robot_simulation import (
@@ -348,24 +350,27 @@ class DynamicsMonitor:
 
 
 class MultiCameraOverlay:
-    class Mode(StrEnum):
-        PRETTY_RGB = auto()
-        RGB = auto()
-        PRETTY = auto()
-        ACCURATE = auto()
+    class Mode(StrEnum):  # Inset configuration
+        NONE = auto()
+        PRETTY_RGB = auto()  # rgb coloring and comfortable size
+        RGB = auto()         # rgb coloring and accurate size
+        PRETTY = auto()      # color-mapped vision and comfortable size
+        ACCURATE = auto()    # color-mapped vision and accurate size (WYSWYG)
 
     PRETTY_CAMERA_WIDTH_RATIO = .25
 
-    def __init__(self, vision):
+    def __init__(self, vision, fd_cm, inv_cm):
         self.viewer = None
         self.cameras = None
         self.vision = vision
-        self.mode = self.Mode.PRETTY_RGB
+        self.mode = self.Mode.ACCURATE
 
         self.vopt, self.scene, self.ctx = None, None, None
 
-        self.step = 0
-        self.camera_buffer, self.window_buffer = np.zeros(shape=(*vision, 3)), np.zeros(0)
+        self.camera_buffer = np.zeros(shape=(vision[1], vision[0], 3), dtype=np.uint8)
+        self.window_buffer = np.zeros(0)
+
+        self.fd_cm, self.inv_cm = fd_cm, inv_cm
 
     def start(self, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
         self.viewer = viewer
@@ -395,64 +400,84 @@ class MultiCameraOverlay:
                 self.next_mode
             )
 
-        self.step = 0
+            viewer._viewer_backend.add_callback(None, None, glfw.KEY_PAGE_DOWN, None, self.prev_mode)
 
-    def next_mode(self):
+    def next_mode(self, step=1):
         modes = list(self.Mode)
-        index = modes.index(self.mode) + 1
+        index = (modes.index(self.mode) + step) % len(modes)
         print(f"{self.mode} -> {modes}[{index}]")
-        if index >= len(modes):
-            index = 0
         self.mode = modes[index]
         print(f">>", self.mode)
 
+    def prev_mode(self):
+        self.next_mode(-1)
+
     def process(self, model: MjModel, data: MjData, viewer: _MujocoViewerBackend):
-        if not viewer.is_alive:
+        if not viewer.is_alive or self.mode is self.Mode.NONE:
             return
+
+        start_0 = time.time()
 
         vw, vh = self.vision
         width, height = viewer.viewport.width, viewer.viewport.height
         for camera in self.cameras:
             inset_width = int(width * self.PRETTY_CAMERA_WIDTH_RATIO)
             inset_height = int(inset_width * vh / vw)
-            if "PRETTY" in self.mode.name:
+            if self.mode in [self.Mode.PRETTY, self.Mode.PRETTY_RGB]:
                 camera_width, camera_height = inset_width, inset_height
             else:
                 camera_width, camera_height = self.vision
 
-            mujoco.mjv_updateScene(model, data, self.vopt, None, camera, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
+            mujoco.mjv_updateScene(model, data, self.vopt, None, camera, mujoco.mjtCatBit.mjCAT_ALL.value, self.scene)
 
-            viewport = mujoco.MjrRect(width - inset_width, height - inset_height, inset_width, inset_height)
-            mujoco.mjr_rectangle(mujoco.MjrRect(viewport.left - 1, viewport.bottom - 1,
-                                                viewport.width + 2, viewport.height + 2),
+            viewport_inset = mujoco.MjrRect(width - inset_width, height - inset_height, inset_width, inset_height)
+
+            mujoco.mjr_rectangle(mujoco.MjrRect(viewport_inset.left - 1, viewport_inset.bottom - 1,
+                                                viewport_inset.width + 2, viewport_inset.height + 2),
                                  1, 0, 0, 1)
-            mujoco.mjr_render(viewport, self.scene, self.ctx)
-            if "RGB" not in self.mode.name:  # View has been rendered, now draw over it with colormapping
-                if self.mode is self.Mode.PRETTY:
-                    size = camera_width * camera_height * 3
-                    if len(self.window_buffer) != size:
-                        self.window_buffer = np.ones(shape=size, dtype=np.uint8)
-                    buffer = self.window_buffer
-                elif self.mode is self.Mode.ACCURATE:
+
+            if self.mode is self.Mode.PRETTY_RGB:
+                viewport_render = mujoco.MjrRect(width - camera_width, height - camera_height,
+                                                 camera_width, camera_height)
+                mujoco.mjr_render(viewport_render, self.scene, self.ctx)
+
+            else:
+                viewport_render = mujoco.MjrRect(0, 0, camera_width, camera_height)
+                # View has been rendered, now grab and tweak it
+
+                rescale = (self.mode in [self.Mode.RGB, self.Mode.ACCURATE])
+
+                if rescale:
                     buffer = self.camera_buffer
                 else:
-                    raise ValueError(f"Unknown mode: {self.mode.name}")
+                    size = inset_width * inset_height * 3
+                    if len(self.window_buffer) != size:
+                        self.window_buffer = np.ones(shape=(inset_height, inset_width, 3), dtype=np.uint8)
+                    buffer = self.window_buffer
 
-                mujoco.mjr_readPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
-                if self.mode is self.Mode.ACCURATE:
-                    print("1")
-                    cv2.imwrite("foo.png", np.flipud(buffer.reshape((camera_height, camera_width, 3))[:, :, ::-1]))
-                    print("2")
-                    buffer = cv2.resize(buffer, (inset_width, inset_height)).flatten()
-                    print("3")
-                    cv2.imwrite("foo2.png", np.flipud(buffer.reshape((inset_height, inset_width, 3))[:, :, ::-1]))
-                    print("4")
+                start_rn = time.time()
+                mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.ctx)
+                mujoco.mjr_render(viewport_render, self.scene, self.ctx)
+                mujoco.mjr_readPixels(buffer, None, viewport_render, self.ctx)
+                mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_WINDOW, self.ctx)
+                print(" grab:", time.time() - start_rn)
 
-                print(buffer.shape, viewport.width * viewport.height*3)
-                mujoco.mjr_drawPixels(rgb=buffer, depth=None, viewport=viewport, con=self.ctx)
+                if self.mode in [self.Mode.PRETTY, self.Mode.ACCURATE]:
+                    start_cm = time.time()
+                    buffer = self.inv_cm(buffer)
+                    print(" cmap:", time.time() - start_cm)
 
-        self.step += 1
-        print("[kgd-debug]", f"{self.step=}")
+                if rescale:
+                    start_rs = time.time()
+                    buffer = cv2.resize(buffer, (inset_width, inset_height),
+                                        interpolation=cv2.INTER_NEAREST)
+                    print("scale:", time.time() - start_rs)
+
+                start_dp = time.time()
+                mujoco.mjr_drawPixels(rgb=buffer.flatten(), depth=None, viewport=viewport_inset, con=self.ctx)
+                print(" draw:", time.time() - start_dp)
+
+        print(f"[{self.mode}] Rendering in", time.time() - start_0)
 
 
 class PersistentViewerOptions:
@@ -580,7 +605,7 @@ class Evaluator(Eval):
         if not options.headless:
             simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
             if config.vision is not None:
-                multiview = MultiCameraOverlay(config.vision)
+                multiview = MultiCameraOverlay(config.vision, ABrainInstance.forward_colormap, ABrainInstance.inverse_colormap)
                 simulator.register_callback(Callback.RENDER_START, multiview.start)
                 simulator.register_callback(Callback.POST_RENDER, multiview.process)
 
