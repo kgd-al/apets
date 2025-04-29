@@ -1,21 +1,25 @@
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from random import Random
 from typing import ClassVar
-
-from abrain.neat.evolver import EvaluationResult
 
 
 @dataclass
 class RGBXYGenome:
-    a: ClassVar[float] = 0
-    s: ClassVar[float] = .01
+    a: ClassVar[float] = .2
+    s: ClassVar[float] = .1
+    fields: ClassVar[str] = "rgbxy"
 
     r: float = 0
     g: float = 0
     b: float = 0
     x: float = 0
     y: float = 0
+
+    @staticmethod
+    def from_string(s: str):
+        return RGBXYGenome(*[float(x) for x in s.replace(",", " ").split()])
 
     def __iter__(self):
         return iter([self.r, self.g, self.b, self.x, self.y])
@@ -25,17 +29,29 @@ class RGBXYGenome:
 
     @classmethod
     def random(cls, rng: Random):
-        return RGBXYGenome(*[rng.uniform(*cls.range(f)) * cls.a for f in "rgbxy"])
+        return RGBXYGenome(*[rng.uniform(*cls.range(f)) * cls.a for f in cls.fields])
 
     def mutate(self, rng: Random):
-        f = rng.choice("rgbxy")
-        setattr(self, f,
-                max(
-                    self.range(f)[0],
-                    min(
-                        getattr(self, f) + rng.gauss(0, self.s),
-                        1
-                    )))
+        n = rng.randint(1, len(self.fields))
+        fields = rng.choices(self.fields, k=n)
+        for f in fields:
+            setattr(self, f,
+                    max(
+                        self.range(f)[0],
+                        min(
+                            getattr(self, f) + rng.gauss(0, self.s / n),
+                            1
+                        )))
+
+    # def mutate(self, rng: Random):
+    #     f = rng.choice("rgbxy")
+    #     setattr(self, f,
+    #             max(
+    #                 self.range(f)[0],
+    #                 min(
+    #                     getattr(self, f) + rng.gauss(0, self.s),
+    #                     1
+    #                 )))
 
     @staticmethod
     def crossover(lhs: 'RGBXYGenome', rhs: 'RGBXYGenome', rng: Random):
@@ -54,3 +70,15 @@ class RGBXYGenome:
         x, y = math.cos(a), math.sin(a)
         res = -math.sqrt((ind.x - x) ** 2 + (ind.y - y) ** 2) + l - 1
         return res
+
+    @classmethod
+    @lru_cache
+    def fitness_range(cls):
+        return (
+            cls.evaluate(RGBXYGenome(1, .749, 0, -1, -1)),
+            cls.evaluate(RGBXYGenome(1, 0, 0, 1, 0))
+        )
+
+    @classmethod
+    def features_range(cls):
+        return (-1, 1), (-1, 1)

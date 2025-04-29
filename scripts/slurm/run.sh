@@ -60,7 +60,9 @@ echo "Seed is \$seed"
 echo "Saving data to \$data_folder"
 echo "Additional arguments: $@"
 
-export MUJOCO_GL=egl
+module load graphviz/12.2.1
+
+export MUJOCO_GL=osmesa
 python src/main/main.py --overwrite False --threads $threads --seed \$seed --data-root \$data_folder $@
 
 for ext in out err

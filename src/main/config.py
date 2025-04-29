@@ -10,13 +10,13 @@ from abrain.neat.config import Config as NEATConfig
 
 class ExperimentType(UppercaseStrEnum):
     LOCOMOTION = auto()
-    FOLLOW = auto()
+    FOLLOW = auto()         #! Not implemented
     PUNCH_ONCE = auto()
     PUNCH_AHEAD = auto()
     PUNCH_BACK = auto()
     PUNCH_THRICE = auto()
     PUNCH_TOGETHER = auto()
-    PUNCH_FOLLOW = auto()
+    PUNCH_FOLLOW = auto()   #! Not implemented
 
 
 EXPERIMENT_DURATIONS = {
