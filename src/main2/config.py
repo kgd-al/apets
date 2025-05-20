@@ -17,13 +17,21 @@ class TaskType(Enum):
 
 @dataclass
 class Config(NEATConfig):
+    experiment: Annotated[str, "Description of the experiment"] = (
+        "CPG - ANN Hybrid using sensory CPGs\n"
+        "CPGs follow the traditional topology (2-neighborhood)"
+        "ANN is not connected, control signals come from the evaluator, all hinges are cpgs"
+        "Morphological evolution is on"
+    )
+    experiment_version: Annotated[str, "Shorthand for the incremental experiment version"] = "0.0.0"
+
     simulation_duration: Annotated[int, "Number of seconds per simulation"] = 5
 
     initial_distance_threshold: float = 1.5  # Overridden from NEATConfig
 
-    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 1
+    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 0#1
     stem_mutate_weight: Annotated[float, "Weight for stem mutations"] = 9
-    brain_mutate_weight: Annotated[float, "Weight for brain mutations"] = 10
+    brain_mutate_weight: Annotated[float, "Weight for brain mutations"] = 0#10
 
     # cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
     # cppn_body_outputs: Annotated[str, "Outputs computed by the body's CPPN"] = "b,a"
@@ -31,3 +39,6 @@ class Config(NEATConfig):
     vision: Annotated[Optional[tuple[int, int]],
                       ("Resolution of the front-facing camera "
                        "or None for no vision")] = None
+
+    generate_plots: Annotated[bool, "Auto-generate fitness and species plots"] = True
+    generate_movie: Annotated[bool, "Auto-generate movie of champion's behavior"] = True

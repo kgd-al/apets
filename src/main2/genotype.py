@@ -43,12 +43,13 @@ class Genotype:
         def __init__(self, config, seed=None):
             self.config = config
             self.body = CPPNGenome.Data.create_for_generic_cppn(
-                inputs=4, outputs=["bsgm", "id"],
+                inputs=4, outputs=["ssgm", "id"], labels="x,y,z,d,M,A",
                 seed=seed,
                 with_lineage=False
             )
             self.stem = CPPNGenome.Data.create_for_generic_cppn(
-                inputs=7, outputs=["bsgm", "step", "step"],
+                inputs=6, outputs=["bsgm", "step", "step"],
+                labels="x_0,y_0,z_0,x_1,y_1,z_1,W,LEO,CPG",
                 with_input_bias=True,
                 seed=seed,
                 with_lineage=False
@@ -116,9 +117,9 @@ class Genotype:
         return DefaultBodyPlan.develop(self.body,
                                        camera=config.vision)
 
-    def develop_brain(self, body: BodyV2, config: Config, with_labels = False, _id: int = 0) -> Brain:
-        return develop_brain(self.brain, body, _id=_id,
-                             with_labels=with_labels)
+    def develop_brain(self, body: BodyV2, config: Config, with_labels=False, _id: int = 0) -> Brain:
+        return develop_brain(body, self.stem, self.brain,
+                             _id=_id, with_labels=with_labels)
 
     @staticmethod
     def distance(lhs: 'Genotype', rhs: 'Genotype') -> float:
@@ -153,10 +154,16 @@ class Genotype:
     def from_file(path) -> Tuple['Genotype', dict]:
         with open(path, "rt") as f:
             j = json.load(f)
+            if "genotype" in j:
+                j_ = j["genotype"]
+            elif "genome" in j:
+                j_ = j["genome"]
+            else:
+                j_ = j
             genome = Genotype(
-                CPPNGenome.from_json(j.pop("body")),
-                CPPNGenome.from_json(j.pop("stem")),
-                CPPNGenome.from_json(j.pop("brain")),
+                CPPNGenome.from_json(j_.pop("body")),
+                CPPNGenome.from_json(j_.pop("stem")),
+                CPPNGenome.from_json(j_.pop("brain")),
             )
 
             return genome, j
@@ -172,7 +179,7 @@ class Genotype:
             logging.error(f"Failed to render brain CPPN to {brain}")
 
         stem = path.parent.joinpath(f"{path.stem}_stem.{ext}")
-        if self.body.to_dot(data.body, stem, ext, title="Stem"):
+        if self.stem.to_dot(data.stem, stem, ext, title="Stem"):
             logging.info(f"Rendered stem CPPN to {stem}")
         else:
             logging.error(f"Failed to render stem CPPN to {stem}")

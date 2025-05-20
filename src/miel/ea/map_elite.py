@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 import os
@@ -6,10 +7,11 @@ import random
 import shutil
 import sys
 import time
+from copy import copy
 from functools import partial
 from pathlib import Path
 from random import Random
-from typing import Iterable, Optional, Sequence, Any, Mapping, NamedTuple, Generic, Type
+from typing import Iterable, Optional, Sequence, Any, Mapping, NamedTuple, Generic, Type, Callable
 
 import numpy as np
 import pandas as pd
@@ -54,29 +56,41 @@ def normalize_run_parameters(options: NamedTuple):
 
 
 class QDIndividual(QDPyIndividual):
-    def __init__(self, genotype: Genotype):
+    def __init__(self, genotype: Genotype, id):
         QDPyIndividual.__init__(self)
         self.genotype = genotype
+        self.id = id
         # assert self.id() is not None
         # self.name = str(self.id())
 
     @property
-    def fitness(self):
-        return QDPyFitness(Individual.fitness, [1 for _ in self.fitness])
+    def fitness(self): return super().fitness
 
     @fitness.setter
-    def fitness(self, _): pass
+    def fitness(self, fitness: Iterable[float] | float) -> None:
+        if isinstance(fitness, (int, float)):
+            fitness = [fitness]
+        self._fitness = QDPyFitness(fitness, [1 for _ in fitness])
 
     @property
-    def features(self):
-        return QDPyFeatures(list(self.descriptors.values()))
+    def features(self): return super().features
 
     @features.setter
-    def features(self, _): pass
+    def features(self, features: Iterable[float]):
+        self._features = QDPyFeatures(list(features))
 
 
 class Algorithm(Evolution, Generic[Genotype]):
-    def __init__(self, container: Container, options, labels, **kwargs):
+    class GIDManager:
+        def __init__(self):
+            self._next_id = 0
+
+        def __call__(self):
+            _id = self._next_id
+            self._next_id += 1
+            return _id
+
+    def __init__(self, container: Container, genome, options, labels, **kwargs):
         # Manage run id, seed, data folder...
         normalize_run_parameters(options)
         name = options.id
@@ -85,12 +99,20 @@ class Algorithm(Evolution, Generic[Genotype]):
         random.seed(options.seed)
         np.random.seed(options.seed % (2**32-1))
 
-        # self.id_manager = GIDManager()
+        self.id_manager = self.GIDManager()
+
+        self.window = None
 
         def select(grid):
             # return self.rng.choice(grid)
             k = min(len(grid), options.tournament)
-            candidates = self.rng.sample(grid.items, k)
+
+            if self.window is None:
+                source = grid.items
+            else:
+                source = None
+            candidates = self.rng.sample(source, k)
+
             candidate_cells = [grid.index_grid(c.features) for c in candidates]
             curiosity = [grid.curiosity[c] for c in candidate_cells]
             if all([c == 0 for c in curiosity]):
@@ -101,14 +123,15 @@ class Algorithm(Evolution, Generic[Genotype]):
             return selection
 
         def init(_):
-            genome = RVGenome.random(self.rng, self.id_manager)
+            genotype = genome.random(self.rng)
             for _ in range(options.initial_mutations):
-                genome.mutate(self.rng)
-            return QDIndividual(genome)
+                genotype.mutate(self.rng)
+            return QDIndividual(genotype, self.id_manager())
 
         def vary(parent):
-            child = QDIndividual(parent.genome.mutated(self.rng, self.id_manager))
-            self._curiosity_lut[child.id()] = self.container.index_grid(parent.features)
+            child = QDIndividual(copy(parent.genotype), id=self.id_manager())
+            child.genotype.mutate(self.rng)
+            self._curiosity_lut[child.id] = self.container.index_grid(parent.features)
             return child
 
         sel_or_init = partial(tools.sel_or_init, init_fn=init, sel_fn=select, sel_pb=1)
@@ -129,7 +152,7 @@ class Algorithm(Evolution, Generic[Genotype]):
         print("[kgd-debug] Created folder", self._snapshots, self._snapshots.exists())
 
         Evolution.__init__(self, container=container, name=name,
-                           budget=options.budget, batch_size=options.batch_size,
+                           # budget=options.budget, batch_size=options.batch_size,
                            select_or_initialise=sel_or_init, vary=vary,
                            optimisation_task="maximisation",
                            **kwargs)
@@ -137,7 +160,7 @@ class Algorithm(Evolution, Generic[Genotype]):
     def tell(self, individual: IndividualLike, *args, **kwargs) -> bool:
         grid: Grid = self.container
         added = super().tell(individual, *args, **kwargs)
-        parent = self._curiosity_lut.pop(individual.id(), None)
+        parent = self._curiosity_lut.pop(individual.id, None)
         if parent is not None:
             grid.curiosity[parent] += {True: 1, False: -.5}[added]
 
@@ -147,14 +170,14 @@ class Algorithm(Evolution, Generic[Genotype]):
                 self._latest_champion = (0, self.nb_evaluations,
                                          individual.fitness)
                 new_champion = True
-                print("[kgd-debug] First champion:", self._latest_champion)
+                # print("[kgd-debug] First champion:", self._latest_champion)
             else:
                 n, timestamp, fitness = self._latest_champion
                 if individual.fitness.dominates(fitness):
                     self._latest_champion = (n+1, self.nb_evaluations,
                                              individual.fitness)
                     new_champion = True
-                    print("[kgd-debug] New champion:", self._latest_champion)
+                    # print("[kgd-debug] New champion:", self._latest_champion)
 
             if new_champion:
                 n, t, _ = self._latest_champion
@@ -167,11 +190,11 @@ class Algorithm(Evolution, Generic[Genotype]):
     @classmethod
     def to_json(cls, i: IndividualLike):
         return {
-            "id": i.id(), "parents": i.genome.parents(),
-            "fitnesses": i.fitnesses,
-            "descriptors": i.descriptors,
-            "stats": i.stats,
-            "genome": i.genome.to_json()
+            "id": i.id, #"parents": i.genotype.parents(),
+            "fitness": i.fitness.values,
+            "descriptors": i.features.values,
+            # "stats": i.stats,
+            "genotype": str(i.genotype)
         }
 
 
@@ -200,7 +223,6 @@ class Logger(algorithms.TQDMAlgorithmLogger):
         super().__init__(*args, **kwargs,
                          final_filename=Logger.final_filename,
                          iteration_filenames=self.iteration_filenames)
-        self.memory_log = Path(self.log_base_path).joinpath("memory.log")
 
     def _started_optimisation(self, algo: QDAlgorithmLike) -> None:
         """Do a mery dance so that tqdm uses stdout instead of stderr"""
@@ -212,14 +234,6 @@ class Logger(algorithms.TQDMAlgorithmLogger):
         header = algorithms.AlgorithmLogger._vals_to_cols_title(self, content)
         mid_rule = "-" * len(header)
         return header + "\n" + mid_rule
-
-    def _tell(self, algo: QDAlgorithmLike, ind: IndividualLike, added: bool,
-              xattr: Mapping[str, Any] = {}) -> None:
-        with open(self.memory_log, "a") as f:
-            if algo.nb_evaluations == 1:
-                f.write(" ".join(ind.memory.keys()) + "\n")
-            f.write(" ".join([str(f) for f in ind.memory.values()]) + "\n")
-        super()._tell(algo, ind, added, xattr)
 
     def summary_plots(self, **kwargs):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -318,7 +332,7 @@ class MapEliteEvolver(Evolver[Genotype, Phenotype, Grid]):
     def __init__(self,
                  genome: Type,
                  grid_shape, fitness_domain, features_domain, labels,
-                 evaluator,
+                 evaluator: Callable[[Genotype], dict],
                  options, **kwargs):
         super().__init__(**kwargs)
 
@@ -326,15 +340,36 @@ class MapEliteEvolver(Evolver[Genotype, Phenotype, Grid]):
                          max_items_per_bin=1,
                          fitness_domain=fitness_domain,
                          features_domain=features_domain)
-        self.algo = Algorithm(self.grid, options, labels=labels)
-        self.evaluator = evaluator
+        self.algo = Algorithm(self.grid,
+                              genome=genome,
+                              options=options, labels=labels,
+                              budget=0, batch_size=0)
+        self.evaluator = functools.partial(self.__evaluate, evaluator=evaluator)
+
+        self.window = 0.1
+        self.window_sizes = [round(self.window * s) for s in grid_shape]
+        assert all(1 < x < s for x, s in zip(self.window_sizes, grid_shape)), \
+            f"Window size '{self.window_sizes}' does not make sense"
+
+    @staticmethod
+    def __evaluate(individual, evaluator):
+        res = evaluator(individual.genotype)
+        individual.fitness = res["fitness"]
+        individual.features = res["features"]
+        return individual
 
     def run(self, n):
+        logger = Logger(self.algo,
+                        save_period=0,
+                        log_base_path="tmp")
+
         self.algo.budget = n * self.grid.capacity
+        self.algo._batch_size = self.grid.capacity
         self.algo.optimise(evaluate=self.evaluator)
 
     def select(self):
-        return []
+        for item in self.
+        return [], {}
 
     def feedback(self, individuals: Iterable[Individual[Genotype, Phenotype]]):
         pass

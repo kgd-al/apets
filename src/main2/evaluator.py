@@ -4,9 +4,10 @@ import logging
 import math
 import numbers
 import pprint
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Annotated, ClassVar, Dict
+from typing import Optional, Annotated, ClassVar, Dict, Any
 
 import glfw
 import numpy as np
@@ -296,74 +297,78 @@ class Evaluator(Eval):
 
         config, options = cls.config, cls.options
 
+        start = time.time()
+
         batch_parameters = make_standard_batch_parameters(
-                simulation_time=options.duration or config.simulation_duration)
-
-        simulator = LocalSimulator(
-            headless=options.headless,
-            num_simulators=1,
-            start_paused=options.start_paused,
-            viewer_type="custom"
-        )
-
-        terrain = make_custom_terrain()
+            simulation_time=options.duration or config.simulation_duration)
 
         robot = genotype.develop(config)
 
-        if not options.headless:
-            simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
-            # if config.vision is not None:
-            #     multiview = MultiCameraOverlay(config.vision, ABrainInstance.forward_colormap, ABrainInstance.inverse_colormap)
-            #     simulator.register_callback(Callback.RENDER_START, multiview.start)
-            #     simulator.register_callback(Callback.POST_RENDER, multiview.process)
-
-        # if options.rerun:
-        #     def write_brain(model, data, mapping, handler):
-        #         brain: ANN3D = handler._brains[0][0].brain
-        #         if not brain.empty():
-        #             brain.render3D().write_html(config.data_root.joinpath("brain.html"))
-        #     simulator.register_callback(Callback.START, write_brain)
-
-        # Create the scenes.
-        scene = ModularRobotScene(terrain=terrain)
-
-        pose = Pose()
-        scene.add_robot(robot, pose=pose)
-
-        if options.rerun:
-            scene.add_site(
-                parent=f"mbs1", parent_tag="attachment_frame",
-                name=f"robot_fwd_stem", pos=[0, 0, 0.075],
-                size=[.05, .005, .001],
-                rgba=[.5, 0, 0, 1],
-                type="box"
-            )
-            scene.add_site(
-                parent=f"mbs1", parent_tag="attachment_frame",
-                name=f"robot_fwd_head", pos=[0.05, 0, 0.075], quat=Quaternion.from_x_rotation(math.pi / 4),
-                size=[.01, .01, .001],
-                rgba=[.5, 0, 0, 1],
-                type="box"
-            )
-
-            scene.add_site(
-                parent=None,
-                name=f"robot_start", pos=pose.position,
-                size=[.1, .1, .005],
-                rgba=[.1, 0., 0, 1.],
-                type="ellipsoid"
-            )
-
-        if options.rerun:
-            scene.add_camera(
-                name="tracking-camera",
-                mode="targetbody",
-                target=f"mbs1/",
-                pos=pose.position + vec(-2, 0, 2)
-            )
-
         fitness = 0
+        stats: Dict[str, Any] = dict(fitnesses=dict())
         for task, fd_type in TASKS.items():
+
+            simulator = LocalSimulator(
+                headless=options.headless,
+                num_simulators=1,
+                start_paused=options.start_paused,
+                viewer_type="custom"
+            )
+
+            terrain = make_custom_terrain()
+
+            if not options.headless:
+                simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
+                # if config.vision is not None:
+                #     multiview = MultiCameraOverlay(config.vision, ABrainInstance.forward_colormap, ABrainInstance.inverse_colormap)
+                #     simulator.register_callback(Callback.RENDER_START, multiview.start)
+                #     simulator.register_callback(Callback.POST_RENDER, multiview.process)
+
+            # if options.rerun:
+            #     def write_brain(model, data, mapping, handler):
+            #         brain: ANN3D = handler._brains[0][0].brain
+            #         if not brain.empty():
+            #             brain.render3D().write_html(config.data_root.joinpath("brain.html"))
+            #     simulator.register_callback(Callback.START, write_brain)
+
+            # Create the scenes.
+            scene = ModularRobotScene(terrain=terrain)
+
+            pose = Pose()
+            scene.add_robot(robot, pose=pose)
+
+            if options.rerun:
+                scene.add_site(
+                    parent=f"mbs1", parent_tag="attachment_frame",
+                    name=f"robot_fwd_stem", pos=[0, 0, 0.075],
+                    size=[.05, .005, .001],
+                    rgba=[.5, 0, 0, 1],
+                    type="box"
+                )
+                scene.add_site(
+                    parent=f"mbs1", parent_tag="attachment_frame",
+                    name=f"robot_fwd_head", pos=[0.05, 0, 0.075], quat=Quaternion.from_x_rotation(math.pi / 4),
+                    size=[.01, .01, .001],
+                    rgba=[.5, 0, 0, 1],
+                    type="box"
+                )
+
+                scene.add_site(
+                    parent=None,
+                    name=f"robot_start", pos=pose.position,
+                    size=[.1, .1, .005],
+                    rgba=[.1, 0., 0, 1.],
+                    type="ellipsoid"
+                )
+
+            if options.rerun:
+                scene.add_camera(
+                    name="tracking-camera",
+                    mode="targetbody",
+                    target=f"mbs1/",
+                    pos=pose.position + vec(-2, 0, 2)
+                )
+
             fd = fd_type(robot,
                          duration=batch_parameters.simulation_time,
                          render=not options.headless)
@@ -392,6 +397,7 @@ class Evaluator(Eval):
             )
 
             subfitness = fd.fitness
+            stats["fitnesses"][task.name.lower()] = subfitness
             try:
                 assert not math.isnan(subfitness) and not math.isinf(subfitness), f"{subfitness=}"
             except Exception as e:
@@ -400,7 +406,12 @@ class Evaluator(Eval):
             fitness += subfitness
         fitness /= len(TASKS)
 
-        return EvaluationResult(fitness=fitness)
+        stats["time"] = time.time() - start
+
+        return EvaluationResult(
+            fitness=fitness,
+            stats=stats,
+        )
 
     @staticmethod
     def rename_movie(genome_file: Path):
@@ -412,7 +423,14 @@ class Evaluator(Eval):
         logging.info(f"Renamed {src=} to {dst=}")
 
 
-def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity):
+def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult,
+                        verbosity, ignore_fields=None):
+    if ignore_fields is None:
+        ignore_fields = []
+    if "time" not in ignore_fields:
+        ignore_fields.append("time")
+    ignore_fields = set(ignore_fields)
+
     width = 20
     key_width = max(len(k) for keys in
                     [["fitness"], lhs.stats or [], rhs.stats or []]
@@ -431,7 +449,7 @@ def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity)
     def map_compare(lhs_d: Dict[str, float], rhs_d: Dict[str, float]):
         output, code = "", 0
         lhs_keys, rhs_keys = set(lhs_d.keys()), set(rhs_d.keys())
-        all_keys = sorted(lhs_keys.union(rhs_keys))
+        all_keys = sorted(lhs_keys.union(rhs_keys).difference(ignore_fields))
         for k in all_keys:
             output += f"{k:>{key_width}}: "
             lhs_v, rhs_v = lhs_d.get(k), rhs_d.get(k)
@@ -471,6 +489,10 @@ def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity)
     #                             json_compliant(rhs.descriptors))
     s_str, s_code = map_compare(lhs.stats or {},
                                 json_compliant(rhs.stats or {}))
+
+    error = max([f_code, s_code])
+    verbosity = max(verbosity, error)
+
     max_width = max(len(line) for text in [f_str, s_str] for line in text.split('\n'))
     if verbosity == 1:
         summary = []
@@ -495,4 +517,4 @@ def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity)
         print()
 
     # return max([f_code, d_code, s_code])
-    return max([f_code, s_code])
+    return error

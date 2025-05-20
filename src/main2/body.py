@@ -430,19 +430,20 @@ def torso_body() -> BodyV2:
 
 def gecko_body() -> BodyV2:
     print("Forcing gecko body")
-    def add_arms(m: Module):
-        m.left = ActiveHingeV2(math.pi / 2.0)
-        m.left.attachment = ActiveHingeV2(math.pi / 2.0)
-        m.left.attachment.attachment = BrickV2(0.0)
-        m.right = ActiveHingeV2(math.pi / 2.0)
-        m.right.attachment = ActiveHingeV2(math.pi / 2.0)
-        m.right.attachment.attachment = BrickV2(0.0)
 
     body = BodyV2()
-    body.core.front.bottom = BrickV2(0.0)
-    add_arms(body.core.front.bottom)
-    body.core.back.bottom = BrickV2(0.0)
-    add_arms(body.core.back.bottom)
+    for m in [body.core_v2.left_face, body.core_v2.right_face]:
+        m.bottom = ActiveHingeV2(math.pi / 2.0)
+        m.bottom.attachment = ActiveHingeV2(math.pi / 2.0)
+        m.bottom.attachment.attachment = BrickV2(0.0)
+
+    m = body.core_v2.back_face.bottom = ActiveHingeV2(math.pi / 2.0)
+    m.attachment = BrickV2(math.pi / 2.0)
+
+    m.attachment.left = ActiveHingeV2(0.)
+    m.attachment.left.attachment = BrickV2(0.0)
+    m.attachment.right = ActiveHingeV2(0.)
+    m.attachment.right.attachment = BrickV2(0.0)
 
     return body
 
@@ -453,7 +454,7 @@ class DefaultBodyPlan(__BodyPlan):
                 camera: Optional[Tuple[int, int]]) -> BodyV2:
         # return empty_body()
         # return torso_body()
-        # return gecko_body()
+        return gecko_body()
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"

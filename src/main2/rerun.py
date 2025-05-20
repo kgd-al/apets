@@ -3,6 +3,8 @@ import argparse
 import logging
 from pathlib import Path
 
+import jsonpickle
+
 from abrain.neat.evolver import EvaluationResult, Evolver
 from evaluator import Evaluator, Options, performance_compare
 from genotype import Genotype
@@ -17,6 +19,8 @@ def get_config(file: Path):
             raise ValueError(f"Could not find evolution.json in any parent"
                              f" directory to '{file}'")
     config, data = Evolver.load_config(config)
+    if isinstance(config.vision, str) and config.vision == "None":
+        config.vision = None
     assert config is not None
     assert data is not None
     return config, data["data"]
@@ -41,7 +45,6 @@ def main() -> None:
 
     setup_logging()
     options.rerun = True
-    print(options)
 
     if options.file == Path("last"):
         options.file = Path("tmp/last/champion.json")
@@ -50,9 +53,6 @@ def main() -> None:
 
     config, static_data = get_config(file)
     config.data_root = file.parent
-
-    logging.warning("Forcing use of a camera")
-    config.vision = (6, 4)
 
     genome, data = Genotype.from_file(file)
     fitness, stats = data["fitness"], data.get("stats", {})

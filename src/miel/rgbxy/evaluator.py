@@ -107,10 +107,7 @@ class RGBXYAutoEvaluator(ScatterEval):
         return _eq_dist(ind.genotype, self.target)
 
     def _label(self):
-        return (f"Target: {(self.target.x, self.target.y)}#"
-                + "".join(
-                    f"{int(255*v):02X}"
-                    for v in [self.target.r, self.target.g, self.target.b]))
+        return (f"Target: {self.target}")
 
     def _subplots(self):
         self.plots.append(

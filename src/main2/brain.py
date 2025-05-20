@@ -1,12 +1,13 @@
 import functools
 import logging
+import math
 import pprint
 from random import Random
 from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
-from abrain import Genome, Point3D as Point, ANN3D as ANN
+from abrain import Genome, Point3D as Point, ANN3D as ANN, CPPN
 from revolve2.modular_robot import ModularRobotControlInterface
 from revolve2.modular_robot.body.base import Body, ActiveHinge
 from revolve2.modular_robot.body.sensors import CameraSensor
@@ -16,68 +17,90 @@ from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 from body import compute_positions
 from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_mapper_rg
+from revolve2.modular_robot.brain.cpg import BrainCpgNetworkNeighbor, BrainCpgInstance
 
 
-DEBUG_IO_NEURONS_MAPPING = False
+class BrainSensoryCpgInstance(BrainCpgInstance):
+    _output_mapping: list[tuple[int, tuple[ActiveHinge, int]]]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        pprint.pprint(self._output_mapping)
+
+    def control(self,
+                dt: float,
+                sensor_state: ModularRobotSensorState,
+                control_interface: ModularRobotControlInterface) -> None:
+        self._state = self._rk45(self._state, self._weight_matrix, dt)
+
+        # Set active hinge targets to match newly calculated state.
+        for state_index, (active_hinge, side) in self._output_mapping:
+            control_interface.set_active_hinge_target(
+                active_hinge, float(self._state[state_index]) * active_hinge.range
+            )
 
 
-def rg_colormap(arr):
-    b, g, r = arr / 255
-    # c = max(-1, min(-r + g - .33 * b, 1))
-    c = max(-1, min(- 2 * r + 1.5 * g + .25 * b, 1))
-    # print(f"BGR: {b} {g} {r} -> {c}\t{arr}")
-    # assert -1 <= c <= 1
-    return c
+class _BrainCpgNetworkNeighbor(BrainCpgNetworkNeighbor):
+    def __init__(self, dna: Genome, body: Body, hinges_coordinates):
+        self.dna = dna
+        super().__init__(body)
+
+        pprint.pprint(hinges_coordinates)
+        self._output_mapping_with_side = [
+            (index, (hinge, self._sign(hinges_coordinates[hinge].y)))
+            for index, hinge in self._output_mapping
+        ]
+
+    @staticmethod
+    def _sign(x):
+        if round(x, 3) == 0:
+            return 0
+        else:
+            return math.copysign(1, x)
+
+    def _make_weights(
+        self,
+        active_hinges: list[ActiveHinge],
+        connections: list[tuple[ActiveHinge, ActiveHinge]],
+        body: Body,
+    ) -> tuple[list[float], list[float]]:
+        cppn = CPPN(self.dna)
+
+        internal_weights = [
+            cppn(0,
+                 pos.x, pos.y, pos.z,
+                 pos.x, pos.y, pos.z)
+            for pos in [
+                body.grid_position(active_hinge) for active_hinge in active_hinges
+            ]
+        ]
+
+        external_weights = [
+            cppn(0,
+                 pos1.x, pos1.y, pos1.z,
+                 pos2.x, pos2.y, pos2.z)
+            for (pos1, pos2) in [
+                (body.grid_position(active_hinge1), body.grid_position(active_hinge2))
+                for (active_hinge1, active_hinge2) in connections
+            ]
+        ]
+
+        return internal_weights, external_weights
+
+    def make_instance(self) -> BrainSensoryCpgInstance:
+        return BrainSensoryCpgInstance(
+            initial_state=self._initial_state,
+            weight_matrix=self._weight_matrix,
+            output_mapping=self._output_mapping_with_side,
+        )
 
 
-def rg_to_rgb_inverse(c):
-    arr = np.array([-round(255*min(c, 0)), round(255*max(c, 0)), 0], dtype=np.uint8)
-    # print(f"C: {c} -> {arr}")
-    return arr
-
-
-def apply_colormap(src, cm):
-    w, h = src.shape[0], src.shape[1]
-    dst = np.zeros(shape=(w, h, 1), dtype=src.dtype)
-    for i in range(w):
-        for j in range(h):
-            dst[i, j] = cm(src[i, j, :])
-    return dst
-
-
-def colormap_two_ways(src, cm, cm_inv):
-    dst = src.copy()
-    w, h = src.shape[0], src.shape[1]
-    for i in range(w):
-        for j in range(h):
-            dst[i, j, :] = cm_inv(cm(src[i, j, :]))
-    # dst2 = src / 255
-    # dst2 = max(-1, min(1, -2 * src[:, :, 2] + 1.5 * src[:, :, 1] + .25 * src[:, :, 0]))
-    # assert dst == dst2
-    return dst
-
-
-class ABrainInstance(BrainInstance):
-    forward_colormap = functools.partial(apply_colormap, cm=rg_colormap)
-    inverse_colormap = functools.partial(colormap_two_ways, cm=rg_colormap, cm_inv=rg_to_rgb_inverse)
-
-    def __init__(self, genome: Genome,
-                 inputs: List[Point], outputs: List[Point],
-                 hinges: List[Tuple[ActiveHinge, int]],
-                 camera: Optional[CameraSensor],
-                 _id: int):
-        self.id = (genome.id(), _id)
-        self.brain = ANN.build(inputs, outputs, genome)
-        self.i_buffer, self.o_buffer = self.brain.buffers()
-        self._hinges = hinges
-        self._camera = camera
+class HackInstance(BrainInstance):
+    def __init__(self, cpg_network: BrainSensoryCpgInstance):
+        self.stem = cpg_network
 
         self._step, self._time = 0, 0
-        logging.debug(f"Created a brain instance for {genome.id()}")
-
-        # logging.warning(f"[kgd-debug:{self.id}] brain={pprint.pformat(self.brain.to_json(), width=200)}")
-        # logging.warning(f"[kgd-debug:{self.id}] i_buffer={pprint.pformat(list(self.i_buffer))}")
-        # logging.warning(f"[kgd-debug:{self.id}] o_buffer={pprint.pformat(list(self.o_buffer))}")
 
         self.__brain_dead = False
         if self.__brain_dead:
@@ -89,7 +112,6 @@ class ABrainInstance(BrainInstance):
             self.rng = Random(0)
 
     def reset(self):
-        logging.debug(f"Reset brain instance {self.id}")
         self.brain.reset()
         self._step, self._time = 0, 0
 
@@ -100,194 +122,26 @@ class ABrainInstance(BrainInstance):
         if self.__brain_dead:
             return
 
-        n_hinges = len(self._hinges)
-        hinges = [0] * n_hinges
-        for hinge, i in self._hinges:
-            hinges[i] = sensor_state.get_active_hinge_sensor_state(
-                hinge.sensors.active_hinge_sensor).position
-
-        # print(f"[kgd-debug:{self.id}] {hinges=}")
-        self.i_buffer[:n_hinges] = hinges
-
-        if self._camera is not None:
-            img = sensor_state.get_camera_sensor_state(self._camera).image
-
-            __debug_img = True
-            if __debug_img:
-                img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}.png"
-                cv2.imwrite(img_file, np.flipud(img)[:, :, ::-1])
-                print("Wrote", img_file)
-
-            cm_img = self.forward_colormap(img)
-
-            if __debug_img:
-                img_file = f"tmp/debug_vision/{self.id[1]}_{self._step}_rg.png"
-                cv2.imwrite(img_file, np.flipud(self.inverse_colormap(img))[:, :, ::-1])
-                print("Wrote", img_file)
-        #     if Config.debug_retina_brain > 1:
-        #         img = self._debug_retina_image()
-        #         self.vision.img = img
-        #     else:
-        #         img = self.vision.process(data.model, data.data)
-            self.i_buffer[n_hinges:] = [x for x in cm_img.flat]
-
-        self._step += 1
-        self._time += dt
-
-        # inputs_str = "[" + ", ".join(f"{i:.3g}" for i in self.i_buffer) + "]"
-        # logging.warning(f"[kgd-debug:{self.id}] inputs={inputs_str}")
-
-        self.brain.__call__(self.i_buffer, self.o_buffer)
-
-        # outputs_str = "[" + ", ".join(f"{o:.3g}" for o in self.o_buffer) + "]"
-        # logging.warning(f"[kgd-debug:{self.id}] outputs={outputs_str}")
-
-        if hasattr(self, "rng"):
-            self.o_buffer[:] = [self.rng.random() * 2 - 1
-                                for _ in range(len(self.o_buffer))]
-
-        for hinge, o_index in self._hinges:
-            control_interface.set_active_hinge_target(
-                hinge, self.o_buffer[o_index] * hinge.range)
-
-        # pprint.pprint([n.value for n in self.brain.neurons()])
+        self.stem.control(dt, sensor_state, control_interface)
 
 
-class ABrainFactory(BrainFactory):
-    def __init__(self, dna: Genome, body: Body,
+class HackFactory(BrainFactory):
+    def __init__(self,
+                 body: Body, stem: Genome, brain: Genome,
                  with_labels=False, _id: int = 0):
-        logging.debug(f"Creating a brain factory for {dna.id()}")
-        self._dna = dna
-        self._labels = {} if with_labels else None
-        self._inputs, self._outputs = [], []
-        self._hinges_mapping = []
+        logging.debug(f"Creating a brain factory for {brain.id()}")
+
+        h_coords = {m: p for m, p in compute_positions(body).items() if isinstance(m, ActiveHinge)}
+
+        self._cpg_network = _BrainCpgNetworkNeighbor(stem, body, h_coords)
+        self._brain = brain
         self._id = _id
 
-        cameras = body.find_sensors_of_type(CameraSensor)
-        assert 0 <= len(cameras) <= 1, "Sorry, cannot work with multiple cameras"
-        self._camera = cameras[0] if len(cameras) > 0 else None
-
-        h_coords = {m: p for m, p in compute_positions(body).items()
-                    if isinstance(m, ActiveHinge)}
-        #
-        # hinges = body.find_modules_of_type(ActiveHinge)
-        # if len(hinges) == 0:
-        #     return
-        #
-        # h_coords = {h: body.grid_position(h) for h in hinges}
-        # pprint.pprint({m.uuid: p for m, p in h_coords.items()})
-
-        bounds = np.zeros((2, 3), dtype=float)
-        if len(h_coords) > 0:
-            np.quantile([c.tolist() for c in h_coords.values()],
-                        [0, 1], axis=0, out=bounds)
-
-        x_min, x_max = bounds[0][0], bounds[1][0]
-        xrange = max(abs(x_min), abs(x_max)) or 1
-        y_min, y_max = bounds[0][1], bounds[1][1]
-        yrange = max(abs(y_min), abs(y_max)) or 1
-        z_min, z_max = bounds[0][2], bounds[1][2]
-        zrange = max(abs(z_min), abs(z_max)) or 1
-
-        hinges_pos = {
-            m: (c.x / xrange, c.y / yrange, c.z / zrange)
-            for m, c in h_coords.items()
-        }
-        # print(bounds)
-        # print(x_min, x_max, xrange)
-        # print(y_min, y_max, yrange)
-        # print(z_min, z_max, zrange)
-        # pprint.pprint({m.uuid: p for m, p in hinges_pos.items()})
-
-        assert len(hinges_pos) == len(set(hinges_pos.values()))
-        # if len(hinges_pos) != len(set(hinges_pos.values())):
-        #     _duplicates = {}
-        #     for m, p in hinges_pos.items():
-        #         _duplicates.setdefault(p, [])
-        #         _duplicates[p].append(m)
-        #     _duplicates = {k: v for k, v in _duplicates.items() if len(v) > 1}
-        #
-        #     d = 0.001
-        #     def _shift(p, s): return __shift(p[0], s, xrange), __shift(p[1], s, yrange), __shift(p[2], s, zrange)
-        #     def __shift(x, s, r): return max(-r, min(x+s*d, r))
-        #     def _pprint_duplicates():
-        #         return pprint.pformat({k: [m.uuid for m in v]
-        #                                for k, v in _duplicates.items()})
-        #     for p, ms in _duplicates.items():
-        #         assert len(ms) == 2, \
-        #             (f"More than two hinges at the same place:\n"
-        #              f" {_pprint_duplicates()}")
-        #         hinges_pos[ms[0]] = _shift(p, +1)
-        #         hinges_pos[ms[1]] = _shift(p, -1)
-        #     logging.warning(f"Duplicate hinge positions detected:\n"
-        #                     f"{_pprint_duplicates()}."
-        #                     " Patching with small variations.")
-
-        for i, (hinge, p) in enumerate(hinges_pos.items()):
-            y = .025 * (p[2] + 1)
-            ip = Point(p[1], -1 + y, p[0])
-            self._inputs.append(ip)
-            op = Point(p[1], 1 - y, p[0])
-            self._outputs.append(op)
-            self._hinges_mapping.append((hinge, i))
-
-            if with_labels:
-                self._labels[ip] = f"P{i}"
-                self._labels[op] = f"M{i}"
-
-            if DEBUG_IO_NEURONS_MAPPING:
-                print(f"[kgd-debug] Hinge({i,}, {p=})")
-                print(f"             > {ip=}")
-                print(f"             > {op=}")
-
-        if self._camera is not None:
-            # mapper = retina_mapper()
-            # w, h = self._camera.camera_size
-            # for j in range(h):
-            #     for i in range(w):
-            #         for k, c in enumerate("RGB"):
-            #             p = mapper(i, j, k, w, h)
-            #             self._inputs.append(p)
-            #
-            #             if with_labels:
-            #                 self._labels[p] = f"{c}[{i},{j}]"
-            mapper = retina_mapper_rg()
-            w, h = self._camera.camera_size
-            for j in range(h):
-                for i in range(w):
-                    p = mapper(i, j, w, h)
-                    self._inputs.append(p)
-
-                    if with_labels:
-                        self._labels[p] = f"V[{i},{j}]"
-
-                    if DEBUG_IO_NEURONS_MAPPING:
-                        print(f"[kgd-debug] Pixel({i}, {j}) -> {p}")
-
-        # Ensure no duplicates
-        try:
-            # assert all(len(set(io_)) == len(io_) for io_ in [inputs, outputs])
-            assert len({p for io in [self._inputs, self._outputs] for p in io}) \
-                   == (len(self._inputs) + len(self._outputs))
-        except AssertionError as e:
-            duplicates = {}
-            for io in [self._inputs, self._outputs]:
-                for p in io:
-                    duplicates[p] = duplicates.get(p, 0) + 1
-            duplicates = {k: v for k, v in duplicates.items() if v > 1}
-            raise ValueError(f"Found duplicates: {pprint.pformat(duplicates)}") from e
-
-    def make_instance(self) -> ABrainInstance:
-        c = ABrainInstance(self._dna,
-                           self._inputs, self._outputs,
-                           self._hinges_mapping, self._camera,
-                           self._id)
-
-        if self._labels:
-            c.labels = self._labels
-
-        return c
+    def make_instance(self) -> HackInstance:
+        return HackInstance(
+            cpg_network=self._cpg_network.make_instance()
+        )
 
 
-def develop(genome: Genome, body: Body, with_labels=False, _id: int = 0):
-    return ABrainFactory(genome, body, with_labels, _id)
+def develop(body: Body, stem: Genome, brain: Genome, with_labels=False, _id: int = 0):
+    return HackFactory(body, stem, brain, with_labels, _id)

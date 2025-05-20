@@ -21,15 +21,23 @@ class RGBXYGenome:
     def from_string(s: str):
         return RGBXYGenome(*[float(x) for x in s.replace(",", " ").split()])
 
+    def __str__(self):
+        return (
+            f"{(self.x, self.y)}#"
+            + "".join(
+                f"{int(255*v):02X}"
+                for v in [self.r, self.g, self.b])
+        )
+
     def __iter__(self):
         return iter([self.r, self.g, self.b, self.x, self.y])
 
     @staticmethod
-    def range(f): return -1 if f in "xy" else 0, 1
+    def __range(f): return -1 if f in "xy" else 0, 1
 
     @classmethod
     def random(cls, rng: Random):
-        return RGBXYGenome(*[rng.uniform(*cls.range(f)) * cls.a for f in cls.fields])
+        return RGBXYGenome(*[rng.uniform(*cls.__range(f)) * cls.a for f in cls.fields])
 
     def mutate(self, rng: Random):
         n = rng.randint(1, len(self.fields))
@@ -37,7 +45,7 @@ class RGBXYGenome:
         for f in fields:
             setattr(self, f,
                     max(
-                        self.range(f)[0],
+                        self.__range(f)[0],
                         min(
                             getattr(self, f) + rng.gauss(0, self.s / n),
                             1
@@ -71,6 +79,10 @@ class RGBXYGenome:
         res = -math.sqrt((ind.x - x) ** 2 + (ind.y - y) ** 2) + l - 1
         return res
 
+    @staticmethod
+    def features(ind: 'RGBXYGenome'):
+        return ind.x, ind.y
+
     @classmethod
     @lru_cache
     def fitness_range(cls):
@@ -82,3 +94,5 @@ class RGBXYGenome:
     @classmethod
     def features_range(cls):
         return (-1, 1), (-1, 1)
+
+

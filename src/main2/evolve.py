@@ -42,8 +42,7 @@ def main(config: Config) -> None:
 
         def save():
             _path = config.data_root.joinpath(f"champion-{i:0{generation_digits}}.json")
-            best_robot.genome.to_file(_path,
-                                      dict(fitness=best_robot.fitness))
+            best_robot.to_file(_path)
             return _path
 
         best_robot = evolver.champion
@@ -56,7 +55,8 @@ def main(config: Config) -> None:
                 best_robot = evolver.champion
                 best_robot_path = save()
 
-    evolver.generate_plots(ext="png", options=dict())
+    if config.generate_plots:
+        evolver.generate_plots(ext="png", options=dict())
 
     champion = config.data_root.joinpath("champion.json")
     champion.symlink_to(best_robot_path.name)
@@ -68,12 +68,13 @@ def main(config: Config) -> None:
     Evaluator.initialize(
         config=config, options=Options(
             rerun=True,
-            movie=True,
+            movie=config.generate_movie,
             headless=True
         ), verbose=False)
     reeval_results = Evaluator.evaluate(best_robot.genome)
 
-    Evaluator.rename_movie(champion)
+    if config.generate_movie:
+        Evaluator.rename_movie(champion)
 
     if performance_compare(reeval_results,
                            EvaluationResult(best_robot.fitness, best_robot.stats),

@@ -939,6 +939,10 @@ def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity)
     #                             json_compliant(rhs.descriptors))
     s_str, s_code = map_compare(lhs.stats or {},
                                 json_compliant(rhs.stats or {}))
+
+    error = max([f_code, s_code])
+    verbosity += error
+
     max_width = max(len(line) for text in [f_str, s_str] for line in text.split('\n'))
     if verbosity == 1:
         summary = []
@@ -963,4 +967,4 @@ def performance_compare(lhs: EvaluationResult, rhs: EvaluationResult, verbosity)
         print()
 
     # return max([f_code, d_code, s_code])
-    return max([f_code, s_code])
+    return

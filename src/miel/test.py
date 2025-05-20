@@ -31,15 +31,18 @@ EVOLVER_KWARGS = {
     NEATEvolver: lambda g: dict(seed=1, evaluator=g.evaluate,
                                 initial_distance=max(g.a, 0.1)),
     MapEliteEvolver: lambda g: dict(
-        grid_shape=(10, 10),
+        grid_shape=(50, 50),
         fitness_domain=FITNESS_RANGES[g],
         features_domain=FEATURES_RANGES[g],
-        LABELS=LABELS[g],
-        evaluator=g.evaluate,
+        labels=LABELS[g],
+        evaluator=lambda _g: dict(fitness=_g.evaluate(_g), features=_g.features(_g)),
         options=SimpleNamespace(
             id=1, seed=1, base_folder="tmp",
             verbosity=1,
-            threads=None
+            threads=None,
+            overwrite=True,
+            initial_mutations=10,
+            tournament=4
         )
     )
 }
