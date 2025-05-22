@@ -118,7 +118,7 @@ class Genotype:
                                        camera=config.vision)
 
     def develop_brain(self, body: BodyV2, config: Config, with_labels=False, _id: int = 0) -> Brain:
-        return develop_brain(body, self.stem, self.brain,
+        return develop_brain(body, self.stem, self.brain, config=config,
                              _id=_id, with_labels=with_labels)
 
     @staticmethod

@@ -1,23 +1,19 @@
-import functools
+import logging
 import logging
 import math
-import pprint
 from random import Random
-from typing import List, Tuple, Optional
 
-import cv2
 import numpy as np
-from abrain import Genome, Point3D as Point, ANN3D as ANN, CPPN
+
+from abrain import Genome, CPPN
+from body import compute_positions
+from config import Config
 from revolve2.modular_robot import ModularRobotControlInterface
 from revolve2.modular_robot.body.base import Body, ActiveHinge
-from revolve2.modular_robot.body.sensors import CameraSensor
 from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
-from revolve2.modular_robot.sensor_state import ModularRobotSensorState
-
-from body import compute_positions
-from _retina_mapping import x_aligned as retina_mapper_x, ternary_1d as retina_mapper_rg
 from revolve2.modular_robot.brain.cpg import BrainCpgNetworkNeighbor, BrainCpgInstance
+from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 
 class BrainSensoryCpgInstance(BrainCpgInstance):
@@ -26,7 +22,7 @@ class BrainSensoryCpgInstance(BrainCpgInstance):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        pprint.pprint(self._output_mapping)
+        # pprint.pprint(self._output_mapping)
 
     def control(self,
                 dt: float,
@@ -44,9 +40,10 @@ class BrainSensoryCpgInstance(BrainCpgInstance):
 class _BrainCpgNetworkNeighbor(BrainCpgNetworkNeighbor):
     def __init__(self, dna: Genome, body: Body, hinges_coordinates):
         self.dna = dna
+        self._hinges_coordinates = hinges_coordinates
+
         super().__init__(body)
 
-        pprint.pprint(hinges_coordinates)
         self._output_mapping_with_side = [
             (index, (hinge, self._sign(hinges_coordinates[hinge].y)))
             for index, hinge in self._output_mapping
@@ -72,7 +69,8 @@ class _BrainCpgNetworkNeighbor(BrainCpgNetworkNeighbor):
                  pos.x, pos.y, pos.z,
                  pos.x, pos.y, pos.z)
             for pos in [
-                body.grid_position(active_hinge) for active_hinge in active_hinges
+                self._hinges_coordinates[active_hinge]
+                for active_hinge in active_hinges
             ]
         ]
 
@@ -81,7 +79,7 @@ class _BrainCpgNetworkNeighbor(BrainCpgNetworkNeighbor):
                  pos1.x, pos1.y, pos1.z,
                  pos2.x, pos2.y, pos2.z)
             for (pos1, pos2) in [
-                (body.grid_position(active_hinge1), body.grid_position(active_hinge2))
+                (self._hinges_coordinates[active_hinge1], self._hinges_coordinates[active_hinge2])
                 for (active_hinge1, active_hinge2) in connections
             ]
         ]
@@ -128,10 +126,16 @@ class HackInstance(BrainInstance):
 class HackFactory(BrainFactory):
     def __init__(self,
                  body: Body, stem: Genome, brain: Genome,
-                 with_labels=False, _id: int = 0):
+                 config: Config, with_labels=False, _id: int = 0):
         logging.debug(f"Creating a brain factory for {brain.id()}")
 
         h_coords = {m: p for m, p in compute_positions(body).items() if isinstance(m, ActiveHinge)}
+        if len(h_coords) > 0:
+            hc_min, hc_max = np.quantile(np.array(list(h_coords.values())), [0, 1])
+            scale = max(abs(hc_min), abs(hc_max))
+
+            if config.scale_hinges:
+                h_coords = {m: p/scale for m, p in h_coords.items()}
 
         self._cpg_network = _BrainCpgNetworkNeighbor(stem, body, h_coords)
         self._brain = brain
@@ -143,5 +147,6 @@ class HackFactory(BrainFactory):
         )
 
 
-def develop(body: Body, stem: Genome, brain: Genome, with_labels=False, _id: int = 0):
-    return HackFactory(body, stem, brain, with_labels, _id)
+def develop(body: Body, stem: Genome, brain: Genome,
+            config: Config, with_labels=False, _id: int = 0):
+    return HackFactory(body, stem, brain, config, with_labels, _id)

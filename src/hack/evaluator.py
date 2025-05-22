@@ -89,10 +89,9 @@ def make_custom_terrain() -> Terrain:
 class SubTaskFitnessData:
     __debug = False
 
-    def __init__(self, robot, state, duration, render=False):
+    def __init__(self, robot, state, render=False):
         self.robot = robot
         self.state = state
-        self.duration = duration
 
         self.mapping: Optional[AbstractionToMujocoMapping] = None
         self.robot_ix = None
@@ -126,42 +125,40 @@ class SubTaskFitnessData:
         pass
 
 
-class MoveStopFitness(SubTaskFitnessData):
-    def __init__(self, robot, duration: float, move_first=True, render=False):
+class MoveFitness(SubTaskFitnessData):
+    def __init__(self, robot, forward=True, render=False):
         super().__init__(robot=robot,
-                         state=1 if move_first else -1,
-                         duration=duration,
+                         state=1 if forward else -1,
                          render=render)
-        self.prev_pos = None
-        self.prev_time, self.switch_time = None, duration * .5
+        self.prev_x = None
 
     def before_step(self, model: MjModel, data: MjData):
-        self.prev_pos = self.robot_pos(data)
-        self.prev_time = data.time
+        self.prev_x = self.robot_pos(data).x
         # print("[kgd-debug] Before step:", self.prev_pos)
 
     def after_step(self, model: MjModel, data: MjData):
-        pos = self.robot_pos(data)
-        delta_pos = pos - self.prev_pos
+        x = self.robot_pos(data).x
+        delta_x = x - self.prev_x
         # print("[kgd-debug] After step:", pos)
         # print("[kgd-debug] > Delta", delta_pos)
 
-        self._fitness += self.state * delta_pos.length
-
-        if self.prev_time < self.switch_time < data.time:
-            self.state *= -1
+        self._fitness += self.state * delta_x
 
 
-class StopMoveFitness(MoveStopFitness):
-    def __init__(self, robot, duration: float, render=False):
-        super().__init__(robot=robot, move_first=False, duration=duration, render=render)
+class MoveForwardFitness(MoveFitness):
+    def __init__(self, robot, render=False):
+        super().__init__(robot=robot, forward=True, render=render)
+
+
+class MoveBackwardFitness(MoveFitness):
+    def __init__(self, robot, render=False):
+        super().__init__(robot=robot, forward=False, render=render)
 
 
 class RotateFitness(SubTaskFitnessData):
-    def __init__(self, robot, duration: float, rotate_direct, render=False):
+    def __init__(self, robot, rotate_direct, render=False):
         super().__init__(robot=robot,
                          state=1 if rotate_direct else -1,
-                         duration=duration,
                          render=render)
         self.prev_angle = None
 
@@ -183,18 +180,18 @@ class RotateFitness(SubTaskFitnessData):
 
 
 class RotateDirectFitness(RotateFitness):
-    def __init__(self, robot, duration: float, render=False):
-        super().__init__(robot, duration, True, render)
+    def __init__(self, robot, render=False):
+        super().__init__(robot, True, render)
 
 
 class RotateIndirectFitness(RotateFitness):
-    def __init__(self, robot, duration: float, render=False):
-        super().__init__(robot, duration, False, render)
+    def __init__(self, robot, render=False):
+        super().__init__(robot, False, render)
 
 
 TASKS = {
-    TaskType.MOVE_STOP: MoveStopFitness,
-    TaskType.STOP_MOVE: StopMoveFitness,
+    TaskType.FORWARD: MoveForwardFitness,
+    TaskType.BACKWARD: MoveBackwardFitness,
     TaskType.ROTATE_LEFT: RotateDirectFitness,
     TaskType.ROTATE_RIGHT: RotateIndirectFitness,
 }
@@ -299,14 +296,18 @@ class Evaluator(Eval):
 
         start = time.time()
 
-        batch_parameters = make_standard_batch_parameters(
-            simulation_time=options.duration or config.simulation_duration)
+        tasks = TASKS if not config.monotask else {TaskType.FORWARD: TASKS[TaskType.FORWARD]}
+        duration = options.duration or config.simulation_duration
+        # duration *= len(TASKS) / len(tasks)
+
+        batch_parameters = make_standard_batch_parameters(simulation_time=duration)
 
         robot = genotype.develop(config)
 
         fitness = 0
         stats: Dict[str, Any] = dict(fitnesses=dict())
-        for task, fd_type in TASKS.items():
+
+        for task, fd_type in tasks.items():
 
             simulator = LocalSimulator(
                 headless=options.headless,
@@ -369,9 +370,7 @@ class Evaluator(Eval):
                     pos=pose.position + vec(-2, 0, 2)
                 )
 
-            fd = fd_type(robot,
-                         duration=batch_parameters.simulation_time,
-                         render=not options.headless)
+            fd = fd_type(robot, render=not options.headless)
 
             simulator.register_callback(Callback.START, fd.start)
             simulator.register_callback(Callback.PRE_STEP, fd.before_step)
@@ -404,9 +403,10 @@ class Evaluator(Eval):
                 raise RuntimeError(f"{subfitness=}") from e
 
             fitness += subfitness
-        fitness /= len(TASKS)
+        fitness /= len(tasks)
 
         stats["time"] = time.time() - start
+        # print(f"{genotype.id()=}", "time =", stats["time"])
 
         return EvaluationResult(
             fitness=fitness,

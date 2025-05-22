@@ -1,16 +1,17 @@
 """Configuration parameters for this example."""
 from dataclasses import dataclass
 from enum import auto, Enum
-from typing import Annotated, Optional, Tuple
+from typing import Annotated, Optional, Tuple, ClassVar
 
 from strenum import UppercaseStrEnum
 
-from abrain.neat.config import Config as NEATConfig
+from abrain import Config as ABrainConfig
+from abrain.neat.config import Config as NEATConfig, ConfigBase
 
 
 class TaskType(Enum):
-    MOVE_STOP = auto()
-    STOP_MOVE = auto()
+    FORWARD = auto()
+    BACKWARD = auto()
     ROTATE_LEFT = auto()
     ROTATE_RIGHT = auto()
 
@@ -25,11 +26,15 @@ class Config(NEATConfig):
     )
     experiment_version: Annotated[str, "Shorthand for the incremental experiment version"] = "0.0.0"
 
+    monotask: Annotated[bool, "Whether to evolve with individual tasks (move, rotate...) or just move"] = True
+
+    scale_hinges: Annotated[bool, "Whether to scale hinges coordinates or use raw values"] = True
+
     simulation_duration: Annotated[int, "Number of seconds per simulation"] = 5
 
     initial_distance_threshold: float = 1.5  # Overridden from NEATConfig
 
-    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 0#1
+    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 9#1
     stem_mutate_weight: Annotated[float, "Weight for stem mutations"] = 9
     brain_mutate_weight: Annotated[float, "Weight for brain mutations"] = 0#10
 
@@ -42,3 +47,5 @@ class Config(NEATConfig):
 
     generate_plots: Annotated[bool, "Auto-generate fitness and species plots"] = True
     generate_movie: Annotated[bool, "Auto-generate movie of champion's behavior"] = True
+
+    abrain_config: ClassVar[ABrainConfig]  # TODO: Needs rework in abrain. Static fields are bad

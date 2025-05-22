@@ -454,7 +454,7 @@ class DefaultBodyPlan(__BodyPlan):
                 camera: Optional[Tuple[int, int]]) -> BodyV2:
         # return empty_body()
         # return torso_body()
-        return gecko_body()
+        # return gecko_body()
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"
@@ -464,7 +464,7 @@ class DefaultBodyPlan(__BodyPlan):
         # def rng(): return Random(persistent_rng.random())
         def rng(): return Random(0)
 
-        max_parts = None
+        max_parts = 30
         max_depth = 3
 
         def limit(__n, __d):
@@ -559,7 +559,7 @@ class DefaultBodyPlan(__BodyPlan):
     
         The output ranges between [0,1] and we have 4 rotations available (0, 90, 180, 270).
         """
-        angle = max(0, int(outputs[1] * 4 - 1e-6)) * (np.pi / 2.0)
+        angle = max(0, int(outputs[1] * 4)) * (np.pi / 2.0)
 
         return module_type, angle
 
