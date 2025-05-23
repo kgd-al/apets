@@ -30,11 +30,11 @@ class Config(NEATConfig):
 
     scale_hinges: Annotated[bool, "Whether to scale hinges coordinates or use raw values"] = True
 
-    simulation_duration: Annotated[int, "Number of seconds per simulation"] = 5
+    simulation_duration: Annotated[int, "Number of seconds per simulation"] = 10
 
     initial_distance_threshold: float = 1.5  # Overridden from NEATConfig
 
-    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 9#1
+    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 0#1
     stem_mutate_weight: Annotated[float, "Weight for stem mutations"] = 9
     brain_mutate_weight: Annotated[float, "Weight for brain mutations"] = 0#10
 

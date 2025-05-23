@@ -17,7 +17,7 @@ name=$1
 seeds=$2
 shift 2
 
-data_root=$HOME/data/hack/
+data_root=$HOME/data/recent/hack/
 mkdir -p "$data_root"
 
 slurm_logs=$data_root/slurm_logs/$name/
@@ -60,13 +60,20 @@ echo "Seed is \$seed"
 echo "Saving data to \$data_folder"
 echo "Additional arguments: $@"
 
+# Pretty CPPN rendering
 module load graphviz/12.2.1
 
+# Run
+export MUJOCO_GL=egl # Just to prevent it from importing glfw
 python src/hack/evolve.py --overwrite False --threads $threads --seed \$seed --data-root \$data_folder $@
 
+# Move slurm logs to local folder
 for ext in out err
 do
   mv -v $slurm_logs/run-\$seed.\$ext \$data_folder/slurm.\$ext
 done
+
+# Last one cleans the now empty folder
+rmdir --ignore-fail-on-non-empty $slurm_logs
 
 EOF

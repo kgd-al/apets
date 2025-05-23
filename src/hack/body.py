@@ -4,20 +4,19 @@ import math
 import pprint
 from collections import defaultdict
 from dataclasses import dataclass
-from queue import Queue
 from random import Random
-from typing import Any, List, Union, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 
 import numpy as np
-from abrain import Genome, CPPN
 from numpy.typing import NDArray
 from pyrr import Quaternion, Vector3
+
+from abrain import Genome, CPPN
 from revolve2.modular_robot.body import AttachmentPoint, Module, RightAngles
 from revolve2.modular_robot.body.base import Body
 from revolve2.modular_robot.body.sensors import ActiveHingeSensor, CameraSensor
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV2
 from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
-from revolve2.simulation.scene import _aabb, Pose
 
 _DEBUG = -1
 
@@ -429,21 +428,39 @@ def torso_body() -> BodyV2:
 
 
 def gecko_body() -> BodyV2:
-    print("Forcing gecko body")
+    # print("Forcing gecko body")
+
+    def limb(module, attachment):
+        setattr(module, attachment, ActiveHingeV2(math.pi / 2.0))
+        _m = getattr(module, attachment)
+        _m.attachment = ActiveHingeV2(math.pi / 2.0)
+        _m.attachment.attachment = BrickV2(0.0)
 
     body = BodyV2()
-    for m in [body.core_v2.left_face, body.core_v2.right_face]:
-        m.bottom = ActiveHingeV2(math.pi / 2.0)
-        m.bottom.attachment = ActiveHingeV2(math.pi / 2.0)
-        m.bottom.attachment.attachment = BrickV2(0.0)
+    core = body.core_v2
+    l = core.left_face.bottom = BrickV2(0.0)
+    l.left = BrickV2(0.0)
+    ll = l.left.front = BrickV2(0.0)
+    l.right = BrickV2(0.0)
+    lr = l.right.front = BrickV2(0.0)
 
-    m = body.core_v2.back_face.bottom = ActiveHingeV2(math.pi / 2.0)
-    m.attachment = BrickV2(math.pi / 2.0)
+    r = core.right_face.bottom = BrickV2(0.0)
+    r.left = BrickV2(0.0)
+    rl = r.left.front = BrickV2(0.0)
+    r.right = BrickV2(0.0)
+    rr = r.right.front = BrickV2(0.0)
 
-    m.attachment.left = ActiveHingeV2(0.)
-    m.attachment.left.attachment = BrickV2(0.0)
-    m.attachment.right = ActiveHingeV2(0.)
-    m.attachment.right.attachment = BrickV2(0.0)
+    for m, a in [(ll, "right"), (l, "front"), (lr, "left"),
+                 (rl, "right"), (r, "front"), (rr, "left")]:
+        limb(m, a)
+
+    # m = body.core_v2.back_face.bottom = ActiveHingeV2(math.pi / 2.0)
+    # m.attachment = BrickV2(math.pi / 2.0)
+    # m.attachment.front = ActiveHingeV2(math.pi / 2.0)
+    # m.attachment.front.attachment = BrickV2(math.pi / 2.0)
+    #
+    # for a in ["left", "right"]:
+    #     limb(m.attachment.front.attachment, a)
 
     return body
 
@@ -454,7 +471,7 @@ class DefaultBodyPlan(__BodyPlan):
                 camera: Optional[Tuple[int, int]]) -> BodyV2:
         # return empty_body()
         # return torso_body()
-        # return gecko_body()
+        return gecko_body()
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"

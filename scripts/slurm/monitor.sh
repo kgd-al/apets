@@ -1,11 +1,5 @@
 #!/bin/bash
 
-exp="test"
-if [ $# -ge 1 ]
-then
-  exp=$1
-fi
-
 pretty_time(){
   tokens=$(awk '{ printf "%d %d %d %g", $1 / 86400, ($1 / 3600) % 24, $1 / 60 % 60, $1 % 60 }' <<< "$1")
   read D H M S <<< "$tokens"
@@ -16,7 +10,9 @@ pretty_time(){
   printf "\n"
 }
 
-squeue -o "%.18i %.9P %.21j %.8u %.2t %.10M %.6D %R"
+long_job_name_length=$(squeue -o "%j" | wc -L)
+
+squeue -o "%.18i %.9P %.${long_job_name_length}j %.8u %.2t %.10M %.6D %R"
 echo
 
 errors_str=""
@@ -26,15 +22,16 @@ while read file
 do
   folder=$(dirname $file)
   name=$(basename $folder)
+  exp=$(basename $(dirname $folder))
 
-  slurm_base="$HOME/data/apets/slurm_logs/$exp/$name"
+  slurm_base="$folder/../../slurm_logs/$exp/$name"
 
   slurm_out=$slurm_base.out
   [ ! -f $slurm_base.out ] && slurm_out=$(dirname $file)/slurm.out
   errors=$(tac "$slurm_out" | grep -m 1 "Error")
   if [ -n "$errors" ]
   then
-    errors_str="$errors_str\033[31m$name\033[0m $errors\n"
+    errors_str="$errors_str\033[31m$exp:$name\033[0m $errors\n"
   fi
 
   slurm_err=$slurm_base.err
@@ -42,7 +39,7 @@ do
 #   if [ $(grep -v -e "GLFWError" -e '^$' $slurm_err | wc -l) -gt 0 ]
   if [ $(cat $slurm_err | wc -l) -gt 0 ]
   then
-    errors_str="$errors_str\033[31m$name\033[0m $(head -n 1 $slurm_err)\n"
+    errors_str="$errors_str\033[31m$exp:$name\033[0m $(head -n 1 $slurm_err)\n"
   fi
 
   state=33
@@ -57,13 +54,13 @@ do
   if [ -z "$header" ]
   then
     header=$(grep -m 1 '[[]EVO' $folder/log| cut -c 43- | tr -s ' ' '|')
-    running_str="${running_str}header|${header}ETA\n"
+    running_str="${running_str}Experiment|Run|${header}ETA\n"
   fi
 
   evo=$(tac $folder/log | grep -m 1 '[[]EVO' | cut -c 43- | awk -vOFS="|" '{$1=$1;print}')
   if [ -n "$evo" ]
   then
-    running_str="$running_str\033[${state}m$name\033[0m|$evo"
+    running_str="$running_str\033[${state}m$exp|$name\033[0m|$evo"
 
     if [ -n "$completed" ]
     then
@@ -74,7 +71,7 @@ do
       if [ -f $folder/evolution.json ]
       then
         target_gen=$(jq .config.generations $folder/evolution.json)
-        eta=$(awk '{ print $2 ? $1 * ($3 - $2)/$2 : "inf" }' <<< "$elapsed $curr_gen $target_gen")
+        eta=$(awk '{ print ($2 > 0) ? $1 * ($3 - $2)/$2 : "inf" }' <<< "$elapsed $curr_gen $target_gen")
         eta=$(pretty_time $eta)
       else
         eta="N/A"
@@ -86,7 +83,7 @@ do
     running_str="$running_str\033[37m$name\033[0m|Starting\n"
   fi
 
-done < <(ls -v ~/data/apets/$exp/*/log)
+done < <(find ~/data/recent -name log | sort -V)
 
 printf "$running_str" | column -ts'|' -o ' '
 printf "$errors_str"

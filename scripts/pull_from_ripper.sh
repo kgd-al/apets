@@ -5,7 +5,7 @@ export PYTHONPATH=.
 
 user=kgd
 host=hex
-base=$user@$host:data/apets/
+base=$user@$host:data/recent/
 
 exp='test'
 if [ $# -ge 1 ]
@@ -18,7 +18,7 @@ info=""
 # info=--info=progress2
 (
   set -x;
-  rsync -avzh $info $base remote --prune-empty-dirs -f '+ '$exp'/' -f '+ run*/' -f '+ failures/' \
+  rsync -avzh $info $base remote --prune-empty-dirs -f '+ *'$exp'*/' -f '+ run*/' -f '+ failures/' \
     -f '+ *.json' -f '+ *.dat' -f '+ *.csv' -f '+ log' -f '+ *.png' -f '+ *.mp4' -f '+ *.html' \
     -f '- *'
 )

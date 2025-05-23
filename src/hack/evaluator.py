@@ -104,10 +104,14 @@ class SubTaskFitnessData:
     def fitness(self): return self._fitness
 
     def robot_pos(self, data: MjData):
-        return Vector2(data.xpos[self.robot_ix][:2].copy())
+        return Vector3(data.xpos[self.robot_ix][:3].copy())
 
     def robot_ort(self, data: MjData):
         return data.xquat[self.robot_ix].copy()
+
+    def _robot_xy_angle(self, data: MjData):
+        v = Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
+        return math.atan2(v.y, v.x)
 
     def start(self, model: MjModel, data: MjData,
               mapping: AbstractionToMujocoMapping,
@@ -130,19 +134,23 @@ class MoveFitness(SubTaskFitnessData):
         super().__init__(robot=robot,
                          state=1 if forward else -1,
                          render=render)
-        self.prev_x = None
+        self.prev_pos, self.prev_angle = None, None
 
     def before_step(self, model: MjModel, data: MjData):
-        self.prev_x = self.robot_pos(data).x
+        self.prev_pos = self.robot_pos(data)
+        self.prev_angle = self._robot_xy_angle(data)
         # print("[kgd-debug] Before step:", self.prev_pos)
 
     def after_step(self, model: MjModel, data: MjData):
-        x = self.robot_pos(data).x
-        delta_x = x - self.prev_x
+        pos = self.robot_pos(data)
+        delta = pos - self.prev_pos
+
+        x = self._robot_xy_angle(data)
+        delta_angle = x - self.prev_angle
         # print("[kgd-debug] After step:", pos)
         # print("[kgd-debug] > Delta", delta_pos)
 
-        self._fitness += self.state * delta_x
+        self._fitness += self.state * data.time * delta.x - .25 * (abs(delta.y) + abs(delta_angle))
 
 
 class MoveForwardFitness(MoveFitness):
@@ -173,10 +181,6 @@ class RotateFitness(SubTaskFitnessData):
         # print("[kgd-debug:Rotate] > Delta", delta)
 
         self._fitness += self.state * delta
-
-    def _robot_xy_angle(self, data: MjData):
-        v = Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
-        return math.atan2(v.y, v.x)
 
 
 class RotateDirectFitness(RotateFitness):
