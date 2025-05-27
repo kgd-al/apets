@@ -5,6 +5,7 @@ import math
 import numbers
 import pprint
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Any
@@ -33,11 +34,12 @@ from revolve2.simulation.scene.geometry.textures import MapType
 from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulation.simulator._simulator import Callback
-from revolve2.simulators.mujoco_simulator import LocalSimulator
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
 from revolve2.simulators.mujoco_simulator.textures import Checker
 from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
 from revolve2.standards.simulation_parameters import make_standard_batch_parameters
+
+from local_simulator import LocalSimulator, RewardMetric
 
 
 @dataclass
@@ -86,22 +88,30 @@ def make_custom_terrain() -> Terrain:
     return Terrain(static_geometry=geometries)
 
 
-class SubTaskFitnessData:
+class SubTaskFitnessData(RewardMetric):
     __debug = False
 
     def __init__(self, robot, state, render=False):
         self.robot = robot
         self.state = state
 
-        self.mapping: Optional[AbstractionToMujocoMapping] = None
         self.robot_ix = None
 
-        self._fitness = 0
+        self._fitness, self._reward = 0, 0
 
         self.render = render
 
     @property
     def fitness(self): return self._fitness
+
+    @property
+    def cumulative_reward(self): return self.fitness
+
+    @property
+    def reward(self): return self._reward
+
+    def reset(self):
+        self._fitness, self._reward = 0, 0
 
     def robot_pos(self, data: MjData):
         return Vector3(data.xpos[self.robot_ix][:3].copy())
@@ -113,10 +123,7 @@ class SubTaskFitnessData:
         v = Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
         return math.atan2(v.y, v.x)
 
-    def start(self, model: MjModel, data: MjData,
-              mapping: AbstractionToMujocoMapping,
-              handler: ModularRobotSimulationHandler):
-        self.mapping = mapping
+    def start(self, model: MjModel, data: MjData):
         self.robot_ix = model.body("mbs1/").id
 
     def before_step(self, model: MjModel, data: MjData):
@@ -150,7 +157,8 @@ class MoveFitness(SubTaskFitnessData):
         # print("[kgd-debug] After step:", pos)
         # print("[kgd-debug] > Delta", delta_pos)
 
-        self._fitness += self.state * data.time * delta.x - .25 * (abs(delta.y) + abs(delta_angle))
+        self._reward = self.state * data.time * delta.x - .25 * (abs(delta.y) + abs(delta_angle))
+        self._fitness += self._reward
 
 
 class MoveForwardFitness(MoveFitness):
@@ -180,7 +188,8 @@ class RotateFitness(SubTaskFitnessData):
         delta = self.prev_angle - angle
         # print("[kgd-debug:Rotate] > Delta", delta)
 
-        self._fitness += self.state * delta
+        self._reward = self.state * delta
+        self._fitness += self._reward
 
 
 class RotateDirectFitness(RotateFitness):
@@ -304,26 +313,16 @@ class Evaluator(Eval):
         duration = options.duration or config.simulation_duration
         # duration *= len(TASKS) / len(tasks)
 
-        batch_parameters = make_standard_batch_parameters(simulation_time=duration)
-
         robot = genotype.develop(config)
 
         fitness = 0
         stats: Dict[str, Any] = dict(fitnesses=dict())
 
         for task, fd_type in tasks.items():
-
-            simulator = LocalSimulator(
-                headless=options.headless,
-                num_simulators=1,
-                start_paused=options.start_paused,
-                viewer_type="custom"
-            )
-
             terrain = make_custom_terrain()
 
-            if not options.headless:
-                simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
+            # if not options.headless:
+            #     simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
                 # if config.vision is not None:
                 #     multiview = MultiCameraOverlay(config.vision, ABrainInstance.forward_colormap, ABrainInstance.inverse_colormap)
                 #     simulator.register_callback(Callback.RENDER_START, multiview.start)
@@ -339,20 +338,22 @@ class Evaluator(Eval):
             # Create the scenes.
             scene = ModularRobotScene(terrain=terrain)
 
-            pose = Pose()
+            pose = Pose(orientation=Quaternion.from_x_rotation(math.pi/4))
             scene.add_robot(robot, pose=pose)
 
             if options.rerun:
                 scene.add_site(
                     parent=f"mbs1", parent_tag="attachment_frame",
                     name=f"robot_fwd_stem", pos=[0, 0, 0.075],
+                    quat=pose.orientation.inverse,
                     size=[.05, .005, .001],
                     rgba=[.5, 0, 0, 1],
                     type="box"
                 )
                 scene.add_site(
                     parent=f"mbs1", parent_tag="attachment_frame",
-                    name=f"robot_fwd_head", pos=[0.05, 0, 0.075], quat=Quaternion.from_x_rotation(math.pi / 4),
+                    name=f"robot_fwd_head", pos=pose.orientation.inverse * Vector3([0.05, 0, 0.075]),
+                    quat=Quaternion.from_x_rotation(math.pi / 4),
                     size=[.01, .01, .001],
                     rgba=[.5, 0, 0, 1],
                     type="box"
@@ -374,19 +375,12 @@ class Evaluator(Eval):
                     pos=pose.position + vec(-2, 0, 2)
                 )
 
-            fd = fd_type(robot, render=not options.headless)
+            simulator = LocalSimulator(
+                scene=scene,
 
-            simulator.register_callback(Callback.START, fd.start)
-            simulator.register_callback(Callback.PRE_STEP, fd.before_step)
-            simulator.register_callback(Callback.POST_STEP, fd.after_step)
-            if not options.headless:
-                simulator.register_callback(Callback.PRE_RENDER, fd.pre_render)
-
-            # Simulate all scenes.
-            _ = simulate_scenes(
-                simulator=simulator,
-                batch_parameters=batch_parameters,
-                scenes=scene,
+                headless=True,#options.headless,
+                start_paused=options.start_paused,
+                simulation_time=duration,
                 record_settings=(
                     None
                     if not options.movie else
@@ -398,6 +392,17 @@ class Evaluator(Eval):
                     )
                 )
             )
+            fd = fd_type(robot, render=not options.headless)
+
+            # simulator.register_callback(Callback.START, fd.start)
+            # simulator.register_callback(Callback.PRE_STEP, fd.before_step)
+            # simulator.register_callback(Callback.POST_STEP, fd.after_step)
+            # if not options.headless:
+            #     simulator.register_callback(Callback.PRE_RENDER, fd.pre_render)
+
+            done = False
+            while not done:
+                done = simulator.step()
 
             subfitness = fd.fitness
             stats["fitnesses"][task.name.lower()] = subfitness

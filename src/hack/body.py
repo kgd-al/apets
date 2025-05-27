@@ -17,6 +17,7 @@ from revolve2.modular_robot.body.base import Body
 from revolve2.modular_robot.body.sensors import ActiveHingeSensor, CameraSensor
 from revolve2.modular_robot.body.v2 import ActiveHingeV2, BodyV2, BrickV2, CoreV2
 from revolve2.modular_robot.body.v2._attachment_face_core_v2 import AttachmentFaceCoreV2
+from revolve2.standards import modular_robots_v2, modular_robots_v1
 
 _DEBUG = -1
 
@@ -471,7 +472,8 @@ class DefaultBodyPlan(__BodyPlan):
                 camera: Optional[Tuple[int, int]]) -> BodyV2:
         # return empty_body()
         # return torso_body()
-        return gecko_body()
+        # return gecko_body()
+        return modular_robots_v2.get("spider")
 
         assert genotype.inputs - genotype.bias == 4, f"{genotype.inputs} != 4"
         assert genotype.outputs == 2, f"{genotype.outputs} != 2"

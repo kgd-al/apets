@@ -20,9 +20,11 @@ class TaskType(Enum):
 class Config(NEATConfig):
     experiment: Annotated[str, "Description of the experiment"] = (
         "CPG - ANN Hybrid using sensory CPGs\n"
-        "CPGs follow the traditional topology (2-neighborhood)"
-        "ANN is not connected, control signals come from the evaluator, all hinges are cpgs"
-        "Morphological evolution is on"
+        # "CPGs follow the traditional topology (2-neighborhood)\n"
+        # "ANN is not connected, control signals come from the evaluator, all hinges are cpgs\n"
+        # "Morphological evolution is on\n"
+        "> Basic architecture does not work (CPPN-body+CPPN-CPGs)\n"
+        "> Tests on brute-force mlp training (later on DRL-CPG?)\n"
     )
     experiment_version: Annotated[str, "Shorthand for the incremental experiment version"] = "0.0.0"
 
@@ -34,8 +36,8 @@ class Config(NEATConfig):
 
     initial_distance_threshold: float = 1.5  # Overridden from NEATConfig
 
-    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 0#1
-    stem_mutate_weight: Annotated[float, "Weight for stem mutations"] = 9
+    body_mutate_weight: Annotated[float, "Weight for body mutations"] = 2
+    stem_mutate_weight: Annotated[float, "Weight for stem mutations"] = 8
     brain_mutate_weight: Annotated[float, "Weight for brain mutations"] = 0#10
 
     # cppn_body_inputs: Annotated[str, "Inputs provided to the body's CPPN"] = "x,y,z,d"
