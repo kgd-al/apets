@@ -5,13 +5,11 @@ import math
 import numbers
 import pprint
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Any
 
 import glfw
-import numpy as np
 import yaml
 from colorama import Style, Fore
 from mujoco import MjModel, MjData
@@ -22,24 +20,18 @@ from abrain.neat.config import ConfigBase
 from abrain.neat.evolver import EvaluationResult
 from config import Config, TaskType
 from genotype import Genotype
+from local_simulator import LocalSimulator, StepwiseFitnessFunction
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
-    simulate_scenes, Terrain,
+    Terrain,
 )
-from revolve2.modular_robot_simulation._modular_robot_simulation_handler import ModularRobotSimulationHandler
 from revolve2.simulation.scene import Pose, Color
 from revolve2.simulation.scene.geometry import GeometryPlane
 from revolve2.simulation.scene.geometry.textures import MapType
-from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import RecordSettings
-from revolve2.simulation.simulator._simulator import Callback
-from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
 from revolve2.simulators.mujoco_simulator.textures import Checker
 from revolve2.simulators.mujoco_simulator.viewers import CustomMujocoViewer
-from revolve2.standards.simulation_parameters import make_standard_batch_parameters
-
-from local_simulator import LocalSimulator, RewardMetric
 
 
 @dataclass
@@ -88,7 +80,7 @@ def make_custom_terrain() -> Terrain:
     return Terrain(static_geometry=geometries)
 
 
-class SubTaskFitnessData(RewardMetric):
+class SubTaskFitnessData(StepwiseFitnessFunction):
     __debug = False
 
     def __init__(self, robot, state, render=False):
@@ -110,8 +102,9 @@ class SubTaskFitnessData(RewardMetric):
     @property
     def reward(self): return self._reward
 
-    def reset(self):
+    def reset(self, model: MjModel, data: MjData) -> None:
         self._fitness, self._reward = 0, 0
+        self.robot_ix = model.body("mbs1/").id
 
     def robot_pos(self, data: MjData):
         return Vector3(data.xpos[self.robot_ix][:3].copy())
@@ -122,9 +115,6 @@ class SubTaskFitnessData(RewardMetric):
     def _robot_xy_angle(self, data: MjData):
         v = Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
         return math.atan2(v.y, v.x)
-
-    def start(self, model: MjModel, data: MjData):
-        self.robot_ix = model.body("mbs1/").id
 
     def before_step(self, model: MjModel, data: MjData):
         pass
@@ -295,6 +285,50 @@ class Evaluator(Eval):
                           f"{pprint.pformat(cls.options)}")
 
     @classmethod
+    def scene(cls, robot, rerun, rotated):
+        scene = ModularRobotScene(terrain=make_custom_terrain())
+
+        rotation = Quaternion.from_x_rotation(math.pi / 4) if rotated else Quaternion()
+        pose = Pose(orientation=rotation)
+        scene.add_robot(robot, pose=pose)
+
+        if rerun:
+            scene.add_site(
+                parent=f"mbs1", parent_tag="attachment_frame",
+                name=f"robot_fwd_stem", pos=[0, 0, 0.075],
+                quat=pose.orientation.inverse,
+                size=[.05, .005, .001],
+                rgba=[.5, 0, 0, 1],
+                type="box"
+            )
+            scene.add_site(
+                parent=f"mbs1", parent_tag="attachment_frame",
+                name=f"robot_fwd_head", pos=pose.orientation.inverse * Vector3([0.05, 0, 0.075]),
+                quat=Quaternion.from_x_rotation(math.pi / 4),
+                size=[.01, .01, .001],
+                rgba=[.5, 0, 0, 1],
+                type="box"
+            )
+
+            scene.add_site(
+                parent=None,
+                name=f"robot_start", pos=pose.position,
+                size=[.1, .1, .005],
+                rgba=[.1, 0., 0, 1.],
+                type="ellipsoid"
+            )
+
+        if rerun:
+            scene.add_camera(
+                name="tracking-camera",
+                mode="targetbody",
+                target=f"mbs1/",
+                pos=pose.position + vec(-2, 0, 2)
+            )
+
+        return scene
+
+    @classmethod
     def evaluate(cls, genotype: Genotype) -> EvaluationResult:
         """
         Evaluate a *single* robot.
@@ -319,8 +353,6 @@ class Evaluator(Eval):
         stats: Dict[str, Any] = dict(fitnesses=dict())
 
         for task, fd_type in tasks.items():
-            terrain = make_custom_terrain()
-
             # if not options.headless:
             #     simulator.register_callback(Callback.RENDER_START, PersistentViewerOptions.start)
                 # if config.vision is not None:
@@ -336,47 +368,12 @@ class Evaluator(Eval):
             #     simulator.register_callback(Callback.START, write_brain)
 
             # Create the scenes.
-            scene = ModularRobotScene(terrain=terrain)
+            scene = cls.scene(robot, options.rerun, rotated=True)
 
-            pose = Pose(orientation=Quaternion.from_x_rotation(math.pi/4))
-            scene.add_robot(robot, pose=pose)
-
-            if options.rerun:
-                scene.add_site(
-                    parent=f"mbs1", parent_tag="attachment_frame",
-                    name=f"robot_fwd_stem", pos=[0, 0, 0.075],
-                    quat=pose.orientation.inverse,
-                    size=[.05, .005, .001],
-                    rgba=[.5, 0, 0, 1],
-                    type="box"
-                )
-                scene.add_site(
-                    parent=f"mbs1", parent_tag="attachment_frame",
-                    name=f"robot_fwd_head", pos=pose.orientation.inverse * Vector3([0.05, 0, 0.075]),
-                    quat=Quaternion.from_x_rotation(math.pi / 4),
-                    size=[.01, .01, .001],
-                    rgba=[.5, 0, 0, 1],
-                    type="box"
-                )
-
-                scene.add_site(
-                    parent=None,
-                    name=f"robot_start", pos=pose.position,
-                    size=[.1, .1, .005],
-                    rgba=[.1, 0., 0, 1.],
-                    type="ellipsoid"
-                )
-
-            if options.rerun:
-                scene.add_camera(
-                    name="tracking-camera",
-                    mode="targetbody",
-                    target=f"mbs1/",
-                    pos=pose.position + vec(-2, 0, 2)
-                )
-
+            fd = fd_type(robot, render=not options.headless)
             simulator = LocalSimulator(
                 scene=scene,
+                fitness_function=fd,
 
                 headless=True,#options.headless,
                 start_paused=options.start_paused,
@@ -392,7 +389,6 @@ class Evaluator(Eval):
                     )
                 )
             )
-            fd = fd_type(robot, render=not options.headless)
 
             # simulator.register_callback(Callback.START, fd.start)
             # simulator.register_callback(Callback.PRE_STEP, fd.before_step)
@@ -400,9 +396,8 @@ class Evaluator(Eval):
             # if not options.headless:
             #     simulator.register_callback(Callback.PRE_RENDER, fd.pre_render)
 
-            done = False
-            while not done:
-                done = simulator.step()
+            while not simulator.done:
+                simulator.step()
 
             subfitness = fd.fitness
             stats["fitnesses"][task.name.lower()] = subfitness
