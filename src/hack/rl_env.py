@@ -1,17 +1,119 @@
+import gymnasium as gym
+import numpy as np
+from gymnasium.vector import VectorEnv
+from stable_baselines3.common.env_util import make_vec_env
+
 from hack.evaluator import Evaluator
-from hack.local_simulator import LocalSimulator, GymSimulator
+from hack.local_simulator import LocalSimulator
+from revolve2.modular_robot.brain import BrainInstance
+from revolve2.modular_robot_simulation._build_multi_body_systems import BodyToMultiBodySystemMapping
+from revolve2.modular_robot_simulation._sensor_state_impl import ModularRobotSensorStateImpl
+from revolve2.simulators.mujoco_simulator._simulation_state_impl import SimulationStateImpl
 
 
-def make(robot, rerun, rotated, reward_function):
+class PassthroughBrain(BrainInstance):
+    def __init__(self, mapping: BodyToMultiBodySystemMapping):
+        super().__init__()
+        self._mapping = mapping
+        self._actions = np.zeros(len(mapping.active_hinge_to_joint_hinge))
+
+    def set_action(self, action):
+        assert action.shape == self._actions.shape
+        self._actions[:] = action
+
+    def control(self, dt, sensor_state, control_interface) -> None:
+        for action, hinge in zip(self._actions, self._mapping.active_hinge_to_joint_hinge):
+            control_interface.set_active_hinge_target(
+                hinge.value, action * hinge.value.range
+            )
+
+
+class GymSimulator(LocalSimulator, gym.Env):
+    metadata = {'render.modes': ['human'], "render_fps": 60}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        hinges = len(self._mapping.hinge_joint)
+        inputs = hinges  # TODO Only counts hinges
+        outputs = hinges
+        self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(inputs,))
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(outputs,))
+
+        assert len(self.agents()) == 1, f"Painful enough with one agent. Not bothering with more"
+
+        for i, (old_brain, mapping) in enumerate(self.agents()):
+            self.agents()[i] = (PassthroughBrain(mapping), mapping)
+
+    def agents(self): return self._handler._brains
+
+    def observations(self):
+        data = []
+        data.extend(self._data.sensordata) # Sensors first (only IMU??)
+
+        simulation_state = SimulationStateImpl(
+            data=self._data,
+            abstraction_to_mujoco_mapping=self._mapping,
+            camera_views={}  # TODO Missing cameras
+        )
+
+        for brain, bmb_mapping in self.agents():
+            sensor_state = ModularRobotSensorStateImpl(
+                simulation_state=simulation_state,
+                body_to_multi_body_system_mapping=bmb_mapping,
+            )
+            data.extend([
+                sensor_state.get_active_hinge_sensor_state(hinge.value.sensors.active_hinge_sensor).position
+                for i, hinge in enumerate(bmb_mapping.active_hinge_to_joint_hinge)
+            ])
+        return np.array(data, dtype=np.float32)
+
+    def infos(self): return dict()
+
+    def reset(self, seed=None, options=None):
+        super().reset(scene=None, **(options or {}))
+        return self.observations(), self.infos()
+
+    def step(self, action):
+        self.agents()[0][0].set_action(action)
+
+        super().step()
+
+        return self.observations(), self._fitness_function.reward, self.done, False, self.infos()
+
+
+def make(robot, rerun, rotated, reward_function, **kwargs):
     scene = Evaluator.scene(robot, rerun, rotated)
-    simulator = GymSimulator(
-        scene=scene,
-        fitness_function=reward_function,
-
+    options = dict(
         headless=not rerun,
         start_paused=False,
         simulation_time=10,
         record_settings=None
     )
+    options.update(kwargs)
+    simulator = GymSimulator(
+        scene=scene,
+        fitness_function=reward_function,
+        **options
+    )
 
     return simulator
+
+
+def make_vec(n,
+             *,
+             robot, rotated, reward_function,
+             vec_env_cls,
+             **kwargs):
+    return make_vec_env(
+        env_id=make,
+        n_envs=n,
+        env_kwargs=dict(
+            rerun=False,
+            robot=robot,
+            rotated=rotated,
+            reward_function=reward_function,
+            **kwargs
+        ),
+        vec_env_cls=vec_env_cls,
+    )
