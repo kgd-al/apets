@@ -31,12 +31,12 @@ def main():
 
         # Define and Train the agent
         model = PPO("MlpPolicy", vec_env, device="cpu")
-        model.learn(total_timesteps=1000000, progress_bar=True)
+        model.learn(total_timesteps=1_000_000, progress_bar=True)
 
         model.save(model_file)
 
     else:
-        env = make(rerun=True, **env_kwargs)
+        env = make(rerun=True, **env_kwargs, start_paused=True)
         check_env(env)
 
         model = PPO.load(model_file, device="cpu")

@@ -1,4 +1,5 @@
 """Evaluator class."""
+import itertools
 import json
 import logging
 import math
@@ -10,8 +11,11 @@ from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Any
 
 import glfw
+import mujoco
+import numpy as np
 import yaml
 from colorama import Style, Fore
+from dm_control.mujoco.wrapper import MjvScene
 from mujoco import MjModel, MjData
 from mujoco_viewer import MujocoViewer
 from pyrr import Vector3, Quaternion
@@ -91,7 +95,7 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
         self._fitness, self._reward = 0, 0
 
-        self.render = render
+        self._render = render
 
     @property
     def fitness(self): return self._fitness
@@ -112,8 +116,11 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
     def robot_ort(self, data: MjData):
         return data.xquat[self.robot_ix].copy()
 
+    def _robot_fwd(self, data: MjData):
+        return Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
+
     def _robot_xy_angle(self, data: MjData):
-        v = Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
+        v = self._robot_fwd(data)
         return math.atan2(v.y, v.x)
 
     def before_step(self, model: MjModel, data: MjData):
@@ -122,7 +129,7 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
     def after_step(self, model: MjModel, data: MjData):
         pass
 
-    def pre_render(self, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
+    def render(self, model: MjModel, data: MjData, viewer: CustomMujocoViewer):
         pass
 
 
@@ -132,6 +139,12 @@ class MoveFitness(SubTaskFitnessData):
                          state=1 if forward else -1,
                          render=render)
         self.prev_pos, self.prev_angle = None, None
+        self.original_pos, self.original_angle = None, None
+
+    def reset(self, model: MjModel, data: MjData):
+        super().reset(model, data)
+        self.original_pos, self.original_angle = self.robot_pos(data), self._robot_xy_angle(data)
+        self.base_vector = self._robot_fwd(data)
 
     def before_step(self, model: MjModel, data: MjData):
         self.prev_pos = self.robot_pos(data)
@@ -149,6 +162,42 @@ class MoveFitness(SubTaskFitnessData):
 
         self._reward = self.state * data.time * delta.x - .25 * (abs(delta.y) + abs(delta_angle))
         self._fitness += self._reward
+
+    def render(self, model: MjModel, data: MjData, viewer):
+        assert isinstance(viewer, CustomMujocoViewer)
+        # # scene.ngeom = 0
+        # n = scene.ngeom
+        # i = n
+        # for x, y, z in itertools.product(*((range(-1, 2),) * 3)):
+        #     g = scene.geoms[i]
+        #     mujoco.mjv_initGeom(
+        #         g,
+        #         type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        #         size=[0.02, 0, 0],
+        #         pos=0.1 * np.array([x, y, z]),
+        #         mat=np.eye(3).flatten(),
+        #         rgba=0.5 * np.array([x + 1, y + 1, z + 1, 2])
+        #     )
+        #     i += 1
+        # scene.ngeom = i
+        # print(n, "->", i)
+        p3d = self.robot_pos(data)
+        mat = Quaternion.from_y_rotation(math.pi/2).matrix33
+        # u, v = self.u, self.v
+        # if u is not None:
+        #     mat *= Quaternion.from_z_rotation(theta=math.atan2(u[1], u[0]))
+        args = dict(
+            pos=p3d,
+            type=mujoco.mjtGeom.mjGEOM_ARROW,
+            size=[.005, .005, 1],
+            mat=mat,
+            rgba=[0, 1, 0, .5]
+        )
+        viewer._viewer_backend.add_marker(**args)
+        mat = mat * Quaternion.from_z_rotation(math.pi/2)
+        args["mat"] = mat
+        args["rgba"] = [1, 0, 0, .5]
+        viewer._viewer_backend.add_marker(**args)
 
 
 class MoveForwardFitness(MoveFitness):
