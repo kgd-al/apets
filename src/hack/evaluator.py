@@ -1,4 +1,5 @@
 """Evaluator class."""
+import copy
 import itertools
 import json
 import logging
@@ -13,9 +14,12 @@ from typing import Optional, Annotated, ClassVar, Dict, Any
 import glfw
 import mujoco
 import numpy as np
+import pandas as pd
 import yaml
 from colorama import Style, Fore
 from dm_control.mujoco.wrapper import MjvScene
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from mujoco import MjModel, MjData
 from mujoco_viewer import MujocoViewer
 from pyrr import Vector3, Quaternion
@@ -24,6 +28,7 @@ from abrain.neat.config import ConfigBase
 from abrain.neat.evolver import EvaluationResult
 from config import Config, TaskType
 from genotype import Genotype
+from hack.plot_tools import plot_multicolor
 from local_simulator import LocalSimulator, StepwiseFitnessFunction
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot_simulation import (
@@ -53,6 +58,7 @@ class Options(ConfigBase):
 
 
 def vec(x, y, z): return Vector3([x, y, z], dtype=float)
+def str_vec(v: Vector3): return " ".join(f"{x:g}" for x in v)
 
 
 def make_custom_terrain() -> Terrain:
@@ -114,10 +120,12 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
         return Vector3(data.xpos[self.robot_ix][:3].copy())
 
     def robot_ort(self, data: MjData):
-        return data.xquat[self.robot_ix].copy()
+        q = data.xquat[self.robot_ix].copy()
+        # Swap it around: Mujoco stores (a x y z) instead of (x y z a)
+        return Quaternion([*q[1:], q[0]])
 
     def _robot_fwd(self, data: MjData):
-        return Quaternion(self.robot_ort(data)) * vec(1, 0, 0)
+        return self.robot_ort(data) * vec(1, 0, 0)
 
     def _robot_xy_angle(self, data: MjData):
         v = self._robot_fwd(data)
@@ -134,34 +142,70 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
 
 class MoveFitness(SubTaskFitnessData):
-    def __init__(self, robot, forward=True, render=False):
+    def __init__(self, robot, forward=True,
+                 render=False, log: Optional[Path | str] = None):
         super().__init__(robot=robot,
                          state=1 if forward else -1,
                          render=render)
-        self.prev_pos, self.prev_angle = None, None
-        self.original_pos, self.original_angle = None, None
+        self.prev_pos = None
+        self.original_angle = None
+        self.curr_delta = None
+        self.curr_angle = None
+        self.curr_delta_angle = None
+        self._invalid = False
+        if log is not None:
+            self._log = Path(log)
+            self._log_data = None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
-        self.original_pos, self.original_angle = self.robot_pos(data), self._robot_xy_angle(data)
-        self.base_vector = self._robot_fwd(data)
+        self.original_angle = self._robot_xy_angle(data)
+
+        if (log := getattr(self, "_log", None)) is not None:
+            self._log_data = pd.DataFrame(
+                index=pd.Index([], name="t"),
+                columns=["x", "y", "dx", "dy", "da", "r", "R"])
+            self.before_step(model, data)
+            self.after_step(model, data)
 
     def before_step(self, model: MjModel, data: MjData):
         self.prev_pos = self.robot_pos(data)
-        self.prev_angle = self._robot_xy_angle(data)
-        # print("[kgd-debug] Before step:", self.prev_pos)
 
     def after_step(self, model: MjModel, data: MjData):
         pos = self.robot_pos(data)
-        delta = pos - self.prev_pos
+        self.curr_delta = pos - self.prev_pos
 
-        x = self._robot_xy_angle(data)
-        delta_angle = x - self.prev_angle
+        self.curr_angle = self._robot_xy_angle(data)
+        self.curr_delta_angle = self.curr_angle - self.original_angle
         # print("[kgd-debug] After step:", pos)
         # print("[kgd-debug] > Delta", delta_pos)
 
-        self._reward = self.state * data.time * delta.x - .25 * (abs(delta.y) + abs(delta_angle))
+        self._invalid = (abs(self.curr_delta_angle) > math.pi / 2)
+
+        if self._invalid:
+            self._reward = -100
+        else:
+            self._reward = 0
+            self._reward += self.state * self.curr_delta.x
+            self._reward -= .25 * abs(self.curr_delta.y)
+            self._reward -= .25 * abs(self.curr_delta_angle)
         self._fitness += self._reward
+
+        if self._render and False:
+            print(f"reward(t={data.time}) = {self._reward}, total = {self._fitness}")
+
+        if (log := getattr(self, "_log_data", None)) is not None:
+            self._do_log(log, data, pos)
+
+    def _do_log(self, log, data, pos):
+        log.loc[data.time] = [
+            pos.x, pos.y,
+            self.curr_delta.x, self.curr_delta.y, self.curr_delta_angle,
+            self._reward, self._fitness
+        ]
+
+    @property
+    def invalid(self): return self._invalid
 
     def render(self, model: MjModel, data: MjData, viewer):
         assert isinstance(viewer, CustomMujocoViewer)
@@ -181,33 +225,77 @@ class MoveFitness(SubTaskFitnessData):
         #     i += 1
         # scene.ngeom = i
         # print(n, "->", i)
+
+        def add_marker(**kwargs):
+            kwargs.setdefault("label", "")
+            viewer._viewer_backend.add_marker(**copy.deepcopy(kwargs))
+
+        # Show target
         p3d = self.robot_pos(data)
         mat = Quaternion.from_y_rotation(math.pi/2).matrix33
-        # u, v = self.u, self.v
-        # if u is not None:
-        #     mat *= Quaternion.from_z_rotation(theta=math.atan2(u[1], u[0]))
+        # mat *= Quaternion.from_z_rotation(self.original_angle)
         args = dict(
             pos=p3d,
             type=mujoco.mjtGeom.mjGEOM_ARROW,
             size=[.005, .005, 1],
             mat=mat,
-            rgba=[0, 1, 0, .5]
+            rgba=[.5, .5, .5, .5]
         )
-        viewer._viewer_backend.add_marker(**args)
-        mat = mat * Quaternion.from_z_rotation(math.pi/2)
+        add_marker(**args)
+
+        # Show current orientation
+        mat = Quaternion.from_y_rotation(math.pi/2).matrix33
+        mat *= Quaternion.from_z_rotation(-self.original_angle)
+        mat *= self.robot_ort(data)
         args["mat"] = mat
+        args["rgba"] = [0, 0, 1, .5]
+        add_marker(**args)
+
+        args["pos"] += [0, 0, .2]
+
+        # Show x performance
+        mat = Quaternion.from_y_rotation(math.pi/2).matrix33
+        mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle)
+        # mat = mat * Quaternion.from_z_rotation(math.pi/2)
+        args["mat"] = mat
+        args["size"] = [.005, .005, 10 * self.curr_delta.x]
+        args["rgba"] = [0, 1, 0, .5] if self.state * self.curr_delta.x > 0 else [1, 1, 0, .5]
+        add_marker(**args)
+
+        # Show y performance
+        mat = Quaternion.from_y_rotation(math.pi/2).matrix33
+        mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle + math.pi/2)
+        # mat = mat * Quaternion.from_z_rotation(math.pi/2)
+        args["mat"] = mat
+        args["size"] = [.005, .005, 10 * self.curr_delta.y]
         args["rgba"] = [1, 0, 0, .5]
-        viewer._viewer_backend.add_marker(**args)
+        add_marker(**args)
+
+    def do_plots(self):
+        print(self._log_data)
+        with PdfPages(self._log.joinpath("trajectory.pdf")) as pdf:
+            fig, ax = plt.subplots()
+            plot_multicolor(
+                fig, ax,
+                self._log_data.x, self._log_data.y,
+                self._log_data.r)
+            pdf.savefig(fig)
+            fig, ax = plt.subplots()
+            plot_multicolor(
+                fig, ax,
+                self._log_data.x, self._log_data.y,
+                self._log_data.R)
+            pdf.savefig(fig)
 
 
 class MoveForwardFitness(MoveFitness):
-    def __init__(self, robot, render=False):
-        super().__init__(robot=robot, forward=True, render=render)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, forward=True, **kwargs)
 
 
 class MoveBackwardFitness(MoveFitness):
-    def __init__(self, robot, render=False):
-        super().__init__(robot=robot, forward=False, render=render)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, forward=False, **kwargs)
 
 
 class RotateFitness(SubTaskFitnessData):
@@ -334,17 +422,22 @@ class Evaluator(Eval):
                           f"{pprint.pformat(cls.options)}")
 
     @classmethod
-    def scene(cls, robot, rerun, rotated):
+    def scene(cls, robot, rerun, rotation):
+        if isinstance(rotation, bool):
+            rotation = Quaternion.from_x_rotation(math.pi / 4) if rotation else Quaternion()
+        elif not isinstance(rotation, Quaternion):
+            rotation = Quaternion(rotation)
+
         scene = ModularRobotScene(terrain=make_custom_terrain())
 
-        rotation = Quaternion.from_x_rotation(math.pi / 4) if rotated else Quaternion()
         pose = Pose(orientation=rotation)
         scene.add_robot(robot, pose=pose)
 
         if rerun:
+            top = [0, 0, 0.075]
             scene.add_site(
                 parent=f"mbs1", parent_tag="attachment_frame",
-                name=f"robot_fwd_stem", pos=[0, 0, 0.075],
+                name=f"robot_fwd_stem", pos=top,
                 quat=pose.orientation.inverse,
                 size=[.05, .005, .001],
                 rgba=[.5, 0, 0, 1],
@@ -352,8 +445,9 @@ class Evaluator(Eval):
             )
             scene.add_site(
                 parent=f"mbs1", parent_tag="attachment_frame",
-                name=f"robot_fwd_head", pos=pose.orientation.inverse * Vector3([0.05, 0, 0.075]),
-                quat=Quaternion.from_x_rotation(math.pi / 4),
+                name=f"robot_fwd_head",
+                pos=top + Quaternion.from_z_rotation(rotation.angle) * Vector3([0.05, 0, 0]),
+                quat=Quaternion.from_x_rotation(math.pi / 4) * pose.orientation.inverse,
                 size=[.01, .01, .001],
                 rgba=[.5, 0, 0, 1],
                 type="box"
@@ -369,10 +463,26 @@ class Evaluator(Eval):
 
         if rerun:
             scene.add_camera(
-                name="tracking-camera",
+                name="target-camera",
                 mode="targetbody",
                 target=f"mbs1/",
                 pos=pose.position + vec(-2, 0, 2)
+            )
+
+            cam_right, cam_up = vec(0, -1, 0), vec(1, 0, 0)
+            if not rotation.is_identity:
+                cam_rotation = Quaternion.from_z_rotation(rotation.angle)
+                cam_right, cam_up = cam_rotation * cam_right, cam_rotation * cam_up
+            scene.add_camera(
+                parent="mbs1",
+                parent_tag="attachment_frame",
+                name="tracking-camera",
+                # mode="fixed",
+                # pos=vec(-1, 0, .25),
+                # xyaxes="0 -1 0 0 0 1",
+                mode="track",
+                pos=vec(0, 0, 1),
+                xyaxes=str_vec(cam_right) + " " + str_vec(cam_up),
             )
 
         return scene
@@ -417,7 +527,8 @@ class Evaluator(Eval):
             #     simulator.register_callback(Callback.START, write_brain)
 
             # Create the scenes.
-            scene = cls.scene(robot, options.rerun, rotated=True)
+            rotated = True
+            scene = cls.scene(robot, options.rerun, rotation=True)
 
             fd = fd_type(robot, render=not options.headless)
             simulator = LocalSimulator(

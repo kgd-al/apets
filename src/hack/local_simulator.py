@@ -38,11 +38,16 @@ class StepwiseFitnessFunction(ABC):
     def render(self, model: MjModel, data: MjData, viewer) -> None:
         pass
 
+    @property
     @abstractmethod
     def fitness(self) -> float: ...
 
+    @property
     @abstractmethod
     def reward(self) -> float: ...
+
+    @property
+    def invalid(self) -> bool: return False
 
 
 class LocalSimulator:
@@ -121,9 +126,9 @@ class LocalSimulator:
         self._canceled = False
         self._next_control_time = 0.0
 
-        self._fitness_function.reset(self._model, self._data)
-
         mujoco.mj_forward(self._model, self._data)
+
+        self._fitness_function.reset(self._model, self._data)
 
     def step(self):
         if self._visu is not None and not self._visu.alive:
@@ -150,6 +155,7 @@ class LocalSimulator:
             # print("[MjStep]", self._data.time)
 
         self._fitness_function.after_step(self._model, self._data)
+        self._canceled |= self._fitness_function.invalid
 
     def render(self):
         self._canceled = self._canceled or not self._visu.render()
@@ -172,7 +178,7 @@ if OLD_MUJOCO:
 
 
 def persistent_settings_custom_mujoco_viewer(viewer):
-    viewer.original_close = viewer.close
+    close = viewer.close
 
     storage = viewer.CONFIG_PATH
     storage.parent.mkdir(parents=True, exist_ok=True)
@@ -186,11 +192,13 @@ def persistent_settings_custom_mujoco_viewer(viewer):
                 dict(
                     pos=glfw.get_window_pos(window),
                     size=glfw.get_window_size(window),
+                    menus=viewer._hide_menus,
+                    speed=viewer._run_speed,
                 ),
                 f
             )
 
-        viewer.original_close()
+        close()
 
     viewer.close = monkey_patch
 
@@ -200,8 +208,12 @@ def persistent_settings_custom_mujoco_viewer(viewer):
                 # print("[kgd-debug] restored viewer config: ", config)
                 window = viewer.window
                 glfw.restore_window(window)
-                glfw.set_window_pos(window, *config["pos"])
-                glfw.set_window_size(window, *config["size"])
+                if (pos := config.get("pos")) is not None:
+                    glfw.set_window_pos(window, *pos)
+                if (size := config.get("size")) is not None:
+                    glfw.set_window_size(window, *size)
+                viewer._hide_menus = config.get("menus", False)
+                viewer._run_speed = config.get("speed", 1)
 
     except FileNotFoundError:
         pass
@@ -231,7 +243,8 @@ class _Visualizer:
                 self._viewer = CustomMujocoViewer(model, data,
                                                   backend=RenderBackend.GLFW,
                                                   start_paused=parameters.start_paused)
-                self._viewer_alive = lambda: self._viewer.is_alive
+                self._viewer_alive = self._viewer.is_alive
+                self._close = self._viewer.close_viewer
                 backend = self._viewer._viewer_backend
                 persistent_settings_custom_mujoco_viewer(backend)
                 cam = backend.cam
@@ -239,7 +252,6 @@ class _Visualizer:
             else:
                 self._paused = False
                 self._step = False
-                self._viewer_alive = lambda: self._viewer.is_running
 
                 def key_event(key):
                     if chr(key) == ' ':
@@ -250,11 +262,13 @@ class _Visualizer:
                 self._viewer = launch_passive(
                     model, data,
                     key_callback=key_event)
+                self._viewer_alive = self._viewer.is_running
+                self._close = self._viewer.close
                 cam = self._viewer.cam
                 self._last_step = time.time()
                 self._target_fps = 1/60.
 
-            cam.fixedcamid = data.camera("tracking-camera").id
+            cam.fixedcamid = data.camera("mbs1/tracking-camera").id
             cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
 
     @property
@@ -281,12 +295,13 @@ class _Visualizer:
             self._renderer.update_scene(self._data)
 
         if self._viewer is not None:
+            if not self.alive:
+                self.close()
+                return False
+
             if OLD_MUJOCO:
                 self._viewer.render()
             else:
-                if not self._viewer.is_running():
-                    self.close()
-                    return False
                 self._viewer.sync()
 
                 while self._paused and not self._step and self.alive:
@@ -300,11 +315,15 @@ class _Visualizer:
                 self._step = False
                 self._last_step = time.time()
 
+            if not self.alive:
+                self.close()
+                return False
+
         return True
 
     def close(self):
         # self._save()
-        self._viewer.close()
+        self._close()
 
     # def _restore(self):
     #     print(f"[kgd-debug] _restore({self.persistent_storage()})")

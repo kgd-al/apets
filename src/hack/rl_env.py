@@ -1,10 +1,9 @@
 import gymnasium as gym
 import numpy as np
-from gymnasium.vector import VectorEnv
 from stable_baselines3.common.env_util import make_vec_env
 
-from hack.evaluator import Evaluator
-from hack.local_simulator import LocalSimulator
+from evaluator import Evaluator
+from local_simulator import LocalSimulator
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot_simulation._build_multi_body_systems import BodyToMultiBodySystemMapping
 from revolve2.modular_robot_simulation._sensor_state_impl import ModularRobotSensorStateImpl
@@ -70,7 +69,18 @@ class GymSimulator(LocalSimulator, gym.Env):
 
     def infos(self): return dict()
 
+    @property
+    def reward(self) -> float: return self._fitness_function.reward
+
+    @property
+    def cumulative_reward(self) -> float: return self._fitness_function.fitness
+
+    @property
+    def truncated(self) -> bool:
+        return self._fitness_function.invalid
+
     def reset(self, seed=None, options=None):
+        # print(f"reset at time {self._data.time}")
         super().reset(scene=None, **(options or {}))
         return self.observations(), self.infos()
 
@@ -78,8 +88,9 @@ class GymSimulator(LocalSimulator, gym.Env):
         self.agents()[0][0].set_action(action)
 
         super().step()
+        reward = self.reward
 
-        return self.observations(), self._fitness_function.reward, self.done, False, self.infos()
+        return self.observations(), reward, self.done, self._fitness_function.invalid, self.infos()
 
 
 def make(robot, rerun, rotated, reward_function, **kwargs):
