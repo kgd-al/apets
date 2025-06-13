@@ -14,9 +14,9 @@ from revolve2.modular_robot.body.v2 import BodyV2
 from revolve2.modular_robot.brain import Brain
 
 from abrain.neat.evolver import Evolver
-from body import DefaultBodyPlan, AABB
-from brain import develop as develop_brain
-from config import Config
+from apets.hack.body import DefaultBodyPlan, AABB
+from apets.hack.brain import develop as develop_brain
+from apets.hack.config import Config
 
 
 @dataclass

@@ -11,7 +11,7 @@ from copy import copy
 from functools import partial
 from pathlib import Path
 from random import Random
-from typing import Iterable, Optional, Sequence, Any, Mapping, NamedTuple, Generic, Type, Callable
+from typing import Iterable, Optional, Sequence, Any, NamedTuple, Generic, Type, Callable
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,7 @@ from qdpy.phenotype import Individual as QDPyIndividual, IndividualLike, Fitness
     Features as QDPyFeatures
 from qdpy.plots import plot_evals, plot_iterations
 
-from miel.api import Individual, Genotype, Phenotype, Evolver
+from apets.miel.api import Individual, Genotype, Phenotype, Evolver
 
 
 def normalize_run_parameters(options: NamedTuple):

@@ -3,22 +3,24 @@ import argparse
 import logging
 from pathlib import Path
 
-from revolve2.experimentation.logging import setup_logging
+import jsonpickle
 
 from abrain.neat.evolver import EvaluationResult, Evolver
-from config import ExperimentType
 from evaluator import Evaluator, Options, performance_compare
 from genotype import Genotype
+from revolve2.experimentation.logging import setup_logging
 
 
 def get_config(file: Path):
     root = file.parent.resolve()
     while not (config := root.joinpath('evolution.json')).exists():
         root = root.parent
-        if root == Path('/') or root == Path('.'):
+        if root == Path('/') or root == Path(''):
             raise ValueError(f"Could not find evolution.json in any parent"
                              f" directory to '{file}'")
     config, data = Evolver.load_config(config)
+    if isinstance(config.vision, str) and config.vision == "None":
+        config.vision = None
     assert config is not None
     assert data is not None
     return config, data["data"]
@@ -30,9 +32,6 @@ def main() -> None:
     Options.populate_argparser(parser)
     parser.add_argument("file", type=Path,
                         help="Path to the genome to re-evaluate.")
-    parser.add_argument("--experiment", type=ExperimentType,
-                        help="The experiment type to re-run (can be different"
-                             " from the one used during evolution).")
     parser.add_argument("--render", type=str, nargs='?',
                         help="Render the genotype to file with provided"
                              " extension (or png)",
@@ -46,7 +45,6 @@ def main() -> None:
 
     setup_logging()
     options.rerun = True
-    print(options)
 
     if options.file == Path("last"):
         options.file = Path("tmp/last/champion.json")
@@ -55,13 +53,6 @@ def main() -> None:
 
     config, static_data = get_config(file)
     config.data_root = file.parent
-
-    logging.warning("Forcing use of a camera")
-    config.vision = (6, 4)
-
-    if options.experiment is not None and config.experiment != options.experiment:
-        logging.info(f"Evaluating on {options.experiment} instead of {config.experiment}")
-        config.experiment = options.experiment
 
     genome, data = Genotype.from_file(file)
     fitness, stats = data["fitness"], data.get("stats", {})

@@ -4,11 +4,11 @@ from typing import Type, Optional
 
 import thefuzz.process
 
-from miel.ea.map_elite import MapEliteEvolver
-from src.miel.rgbxy.genome import RGBXYGenome
-from src.miel.api import Evolver, Evaluator
-from src.miel.ea.neat import NEATEvolver
-from src.miel.rgbxy.evaluator import RGBXYGenomeEvaluator, RGBXYAutoEvaluator
+from apets.miel.ea.map_elite import MapEliteEvolver
+from apets.miel.rgbxy.genome import RGBXYGenome
+from apets.miel.api import Evolver, Evaluator
+from apets.miel.ea.neat import NEATEvolver
+from apets.miel.rgbxy.evaluator import RGBXYGenomeEvaluator, RGBXYAutoEvaluator
 
 
 def __to_dict(_list): return {a: a.__name__ for a in _list}

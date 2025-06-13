@@ -6,8 +6,8 @@ from random import Random
 import numpy as np
 
 from abrain import Genome, CPPN
-from body import compute_positions
-from config import Config
+from apets.hack.body import compute_positions
+from apets.hack.config import Config
 from revolve2.modular_robot import ModularRobotControlInterface
 from revolve2.modular_robot.body.base import Body, ActiveHinge
 from revolve2.modular_robot.brain import Brain as BrainFactory

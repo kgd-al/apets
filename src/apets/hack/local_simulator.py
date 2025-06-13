@@ -57,6 +57,8 @@ class LocalSimulator:
         simulation_timestep: float = STANDARD_SIMULATION_TIMESTEP
         control_frequency: float = STANDARD_CONTROL_FREQUENCY
 
+        label: str = None
+
         headless: bool = False
         start_paused: bool = False
         cast_shadows: bool = False
@@ -159,6 +161,9 @@ class LocalSimulator:
 
     def render(self):
         self._canceled = self._canceled or not self._visu.render()
+
+    @property
+    def parameters(self): return self._parameters
 
     @property
     def timeout(self): return self._data.time >= self._parameters.simulation_time

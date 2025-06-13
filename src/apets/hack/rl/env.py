@@ -2,8 +2,8 @@ import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.env_util import make_vec_env
 
-from evaluator import Evaluator
-from local_simulator import LocalSimulator
+from apets.hack.evaluator import Evaluator
+from apets.hack.local_simulator import LocalSimulator
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot_simulation._build_multi_body_systems import BodyToMultiBodySystemMapping
 from revolve2.modular_robot_simulation._sensor_state_impl import ModularRobotSensorStateImpl
@@ -48,7 +48,7 @@ class GymSimulator(LocalSimulator, gym.Env):
 
     def observations(self):
         data = []
-        data.extend(self._data.sensordata) # Sensors first (only IMU??)
+        data.extend(self._data.sensordata)  # Sensors first (only IMU??)
 
         simulation_state = SimulationStateImpl(
             data=self._data,
@@ -76,8 +76,7 @@ class GymSimulator(LocalSimulator, gym.Env):
     def cumulative_reward(self) -> float: return self._fitness_function.fitness
 
     @property
-    def truncated(self) -> bool:
-        return self._fitness_function.invalid
+    def truncated(self) -> bool: return self._canceled
 
     def reset(self, seed=None, options=None):
         # print(f"reset at time {self._data.time}")
@@ -93,13 +92,14 @@ class GymSimulator(LocalSimulator, gym.Env):
         return self.observations(), reward, self.done, self._fitness_function.invalid, self.infos()
 
 
-def make(robot, rerun, rotated, reward_function, **kwargs):
+def make(robot, rerun, rotated, reward_function, name=None, **kwargs):
     scene = Evaluator.scene(robot, rerun, rotated)
     options = dict(
         headless=not rerun,
         start_paused=False,
         simulation_time=10,
-        record_settings=None
+        record_settings=None,
+        label=name
     )
     options.update(kwargs)
     simulator = GymSimulator(
@@ -115,6 +115,7 @@ def make_vec(n,
              *,
              robot, rotated, reward_function,
              vec_env_cls,
+             name=None,
              **kwargs):
     return make_vec_env(
         env_id=make,
@@ -122,6 +123,7 @@ def make_vec(n,
         env_kwargs=dict(
             rerun=False,
             robot=robot,
+            name=name,
             rotated=rotated,
             reward_function=reward_function,
             **kwargs

@@ -1,6 +1,5 @@
 """Evaluator class."""
 import copy
-import itertools
 import json
 import logging
 import math
@@ -13,11 +12,9 @@ from typing import Optional, Annotated, ClassVar, Dict, Any
 
 import glfw
 import mujoco
-import numpy as np
 import pandas as pd
 import yaml
 from colorama import Style, Fore
-from dm_control.mujoco.wrapper import MjvScene
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from mujoco import MjModel, MjData
@@ -26,10 +23,10 @@ from pyrr import Vector3, Quaternion
 
 from abrain.neat.config import ConfigBase
 from abrain.neat.evolver import EvaluationResult
-from config import Config, TaskType
-from genotype import Genotype
-from hack.plot_tools import plot_multicolor
-from local_simulator import LocalSimulator, StepwiseFitnessFunction
+from apets.hack.config import Config, TaskType
+from apets.hack.genotype import Genotype
+from apets.hack.local_simulator import LocalSimulator, StepwiseFitnessFunction
+from apets.hack.plot_tools import plot_multicolor
 from revolve2.experimentation.evolution.abstract_elements import Evaluator as Eval
 from revolve2.modular_robot_simulation import (
     ModularRobotScene,
@@ -93,7 +90,7 @@ def make_custom_terrain() -> Terrain:
 class SubTaskFitnessData(StepwiseFitnessFunction):
     __debug = False
 
-    def __init__(self, robot, state, render=False):
+    def __init__(self, robot, state, rerun=False, render=False):
         self.robot = robot
         self.state = state
 
@@ -101,6 +98,7 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
         self._fitness, self._reward = 0, 0
 
+        self._rerun = rerun
         self._render = render
 
     @property
@@ -143,25 +141,28 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
 class MoveFitness(SubTaskFitnessData):
     def __init__(self, robot, forward=True,
-                 render=False, log: Optional[Path | str] = None):
+                 rerun=False, render=False, log_folder: Optional[Path | str] = None):
         super().__init__(robot=robot,
                          state=1 if forward else -1,
-                         render=render)
+                         rerun=rerun, render=render)
         self.prev_pos = None
         self.original_angle = None
         self.curr_delta = None
         self.curr_angle = None
         self.curr_delta_angle = None
         self._invalid = False
-        if log is not None:
-            self._log = Path(log)
+
+        if log_folder is not None:
+            self._log = Path(log_folder)
             self._log_data = None
+        else:
+            self._log = None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
         self.original_angle = self._robot_xy_angle(data)
 
-        if (log := getattr(self, "_log", None)) is not None:
+        if self._log is not None:
             self._log_data = pd.DataFrame(
                 index=pd.Index([], name="t"),
                 columns=["x", "y", "dx", "dy", "da", "r", "R"])
@@ -194,8 +195,8 @@ class MoveFitness(SubTaskFitnessData):
         if self._render and False:
             print(f"reward(t={data.time}) = {self._reward}, total = {self._fitness}")
 
-        if (log := getattr(self, "_log_data", None)) is not None:
-            self._do_log(log, data, pos)
+        if self._log is not None:
+            self._do_log(self._log_data, data, pos)
 
     def _do_log(self, log, data, pos):
         log.loc[data.time] = [
