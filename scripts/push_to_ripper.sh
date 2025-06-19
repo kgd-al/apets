@@ -24,7 +24,7 @@ else
   rm .requirements
 fi
 
-update apets src scripts requirements.txt
+update apets src scripts requirements.txt pyproject.toml
 
 line
 update abrain -f '- *.so' -f '- .egg-info/' src commands.sh CMakeLists.txt setup.py pyproject.toml

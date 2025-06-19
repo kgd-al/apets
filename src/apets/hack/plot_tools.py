@@ -2,9 +2,10 @@ import warnings
 
 import numpy as np
 from matplotlib.collections import LineCollection
+from matplotlib.figure import Figure
 
 
-def plot_multicolor(fig, ax, x, y, c, **lc_kwargs):
+def plot_multicolor(fig: Figure, ax, x, y, c, **lc_kwargs):
     """
     Plot a line with a color specified along the line by a third value.
 

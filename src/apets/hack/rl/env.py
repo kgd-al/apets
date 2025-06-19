@@ -1,5 +1,9 @@
+import copy
+import logging
+
 import gymnasium as gym
 import numpy as np
+from matplotlib import pyplot as plt
 from stable_baselines3.common.env_util import make_vec_env
 
 from apets.hack.evaluator import Evaluator
@@ -22,6 +26,7 @@ class PassthroughBrain(BrainInstance):
 
     def control(self, dt, sensor_state, control_interface) -> None:
         for action, hinge in zip(self._actions, self._mapping.active_hinge_to_joint_hinge):
+            assert -1 <= action <= 1
             control_interface.set_active_hinge_target(
                 hinge.value, action * hinge.value.range
             )
@@ -61,13 +66,19 @@ class GymSimulator(LocalSimulator, gym.Env):
                 simulation_state=simulation_state,
                 body_to_multi_body_system_mapping=bmb_mapping,
             )
-            data.extend([
+            # TODO: this does NOT smell good
+            data.extend(np.clip([
                 sensor_state.get_active_hinge_sensor_state(hinge.value.sensors.active_hinge_sensor).position
+                / hinge.value.range
                 for i, hinge in enumerate(bmb_mapping.active_hinge_to_joint_hinge)
-            ])
+            ], -1, 1))
+        assert all(-1 <= x <= 1 for x in data)
         return np.array(data, dtype=np.float32)
 
-    def infos(self): return dict()
+    def infos(self): return dict(**self.reward_function.infos)
+
+    @property
+    def reward_function(self): return self.fitness_function
 
     @property
     def reward(self) -> float: return self._fitness_function.reward
@@ -91,20 +102,34 @@ class GymSimulator(LocalSimulator, gym.Env):
 
         return self.observations(), reward, self.done, self._fitness_function.invalid, self.infos()
 
+    def plot_trajectory(self):
+        try:
+            fig = self.reward_function.plot_trajectory("R")
+            canvas = fig.canvas
+            canvas.draw()
+            data = np.asarray(canvas.buffer_rgba())
+            plt.close()
+            return data
+        except Exception as e:
+            logging.error(f"Failed to plot trajectory: {e}")
+            return None
 
-def make(robot, rerun, rotated, reward_function, name=None, **kwargs):
+
+def make(robot, rotated, reward_function, name=None,
+         rerun=False, render=False,
+         **kwargs):
     scene = Evaluator.scene(robot, rerun, rotated)
     options = dict(
-        headless=not rerun,
+        headless=not render,
         start_paused=False,
         simulation_time=10,
+        label=name,
         record_settings=None,
-        label=name
     )
     options.update(kwargs)
     simulator = GymSimulator(
         scene=scene,
-        fitness_function=reward_function,
+        fitness_function=copy.deepcopy(reward_function),
         **options
     )
 
@@ -121,7 +146,6 @@ def make_vec(n,
         env_id=make,
         n_envs=n,
         env_kwargs=dict(
-            rerun=False,
             robot=robot,
             name=name,
             rotated=rotated,

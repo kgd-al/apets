@@ -6,6 +6,7 @@ import math
 import numbers
 import pprint
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Any
@@ -14,6 +15,7 @@ import glfw
 import mujoco
 import pandas as pd
 import yaml
+import matplotlib
 from colorama import Style, Fore
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -90,11 +92,10 @@ def make_custom_terrain() -> Terrain:
 class SubTaskFitnessData(StepwiseFitnessFunction):
     __debug = False
 
-    def __init__(self, robot, state, rerun=False, render=False):
-        self.robot = robot
+    def __init__(self, state, rerun=False, render=False):
         self.state = state
 
-        self.robot_ix = None
+        self.robot = None
 
         self._fitness, self._reward = 0, 0
 
@@ -112,14 +113,13 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
     def reset(self, model: MjModel, data: MjData) -> None:
         self._fitness, self._reward = 0, 0
-        self.robot_ix = model.body("mbs1/").id
+        self.robot = data.body("mbs1/")
 
     def robot_pos(self, data: MjData):
-        return Vector3(data.xpos[self.robot_ix][:3].copy())
+        return Vector3(self.robot.xpos.copy())
 
     def robot_ort(self, data: MjData):
-        q = data.xquat[self.robot_ix].copy()
-        # Swap it around: Mujoco stores (a x y z) instead of (x y z a)
+        q = self.robot.xquat.copy()
         return Quaternion([*q[1:], q[0]])
 
     def _robot_fwd(self, data: MjData):
@@ -140,39 +140,52 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
 
 class MoveFitness(SubTaskFitnessData):
-    def __init__(self, robot, forward=True,
-                 rerun=False, render=False, log_folder: Optional[Path | str] = None):
-        super().__init__(robot=robot,
-                         state=1 if forward else -1,
+    def __init__(self, forward=True,
+                 rerun=False, render=False,
+                 log_trajectory: bool = False,
+                 backup_trajectory: bool = False):
+        super().__init__(state=1 if forward else -1,
                          rerun=rerun, render=render)
+        self.prev_time, self.dt = None, None
         self.prev_pos = None
+        self.original_height = None
         self.original_angle = None
         self.curr_delta = None
         self.curr_angle = None
         self.curr_delta_angle = None
         self._invalid = False
 
-        if log_folder is not None:
-            self._log = Path(log_folder)
-            self._log_data = None
-        else:
-            self._log = None
+        self._infos = defaultdict(int)
+
+        self._log_trajectory = log_trajectory
+        self._log_data = None
+        if backup_trajectory:
+            self._prev_log_data = None
+            self._prev_infos = None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
         self.original_angle = self._robot_xy_angle(data)
+        self.original_height = self.robot_pos(data).z
 
-        if self._log is not None:
+        if self._log_trajectory:
+            if hasattr(self, "_prev_log_data") and self._log_data is not None:
+                self._prev_log_data = self._log_data.copy(True)
+                self._prev_infos = copy.deepcopy(self._infos)
+
             self._log_data = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=["x", "y", "dx", "dy", "da", "r", "R"])
+                columns=["x", "y", "dx", "dy", "dz", "da", "r", "R"])
             self.before_step(model, data)
             self.after_step(model, data)
 
     def before_step(self, model: MjModel, data: MjData):
+        self.prev_time = data.time
         self.prev_pos = self.robot_pos(data)
 
     def after_step(self, model: MjModel, data: MjData):
+        self.dt = data.time - self.prev_time
+
         pos = self.robot_pos(data)
         self.curr_delta = pos - self.prev_pos
 
@@ -181,27 +194,43 @@ class MoveFitness(SubTaskFitnessData):
         # print("[kgd-debug] After step:", pos)
         # print("[kgd-debug] > Delta", delta_pos)
 
-        self._invalid = (abs(self.curr_delta_angle) > math.pi / 2)
+        self._invalid = False
+        # self._invalid |= abs(self.curr_delta_angle) > math.pi / 2
+        # self._invalid |= (data.time > 5 and pos.z <= self.original_height)
 
-        if self._invalid:
-            self._reward = -100
-        else:
-            self._reward = 0
-            self._reward += self.state * self.curr_delta.x
-            self._reward -= .25 * abs(self.curr_delta.y)
-            self._reward -= .25 * abs(self.curr_delta_angle)
+        self._reward = 0
+        # self._reward += self.state * data.time * self.curr_delta.x
+        # self._reward -= .25 * abs(self.curr_delta.y)
+        # self._reward -= .25 * abs(self.curr_delta_angle)
+        self._reward += self.state * self.curr_delta.x
+        # print(f"{self.state * self.curr_delta.x * self.dt} = "
+        #       f"{self.state} * {self.curr_delta.x:.10f} * {self.dt}")
+        # self._reward += .5 * (pos.z > self.original_height)
+        # if not self._invalid:
+        #     self._reward += .1  # healthy
+
+        self._reward *= self.dt
         self._fitness += self._reward
 
         if self._render and False:
             print(f"reward(t={data.time}) = {self._reward}, total = {self._fitness}")
 
-        if self._log is not None:
+        if self._log_trajectory:
             self._do_log(self._log_data, data, pos)
+            self._infos["dX"] = pos.x
+            self._infos["dY"] = pos.y
+            self._infos["cX"] += self.curr_delta.x
+            self._infos["cY"] += self.curr_delta.y
+
+    @property
+    def infos(self): return getattr(self, "_prev_infos", self._infos)
 
     def _do_log(self, log, data, pos):
         log.loc[data.time] = [
             pos.x, pos.y,
-            self.curr_delta.x, self.curr_delta.y, self.curr_delta_angle,
+            self.curr_delta.x, self.curr_delta.y,
+            pos.z - self.original_height,
+            self.curr_delta_angle,
             self._reward, self._fitness
         ]
 
@@ -256,7 +285,7 @@ class MoveFitness(SubTaskFitnessData):
 
         # Show x performance
         mat = Quaternion.from_y_rotation(math.pi/2).matrix33
-        mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle)
+        # mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle)
         # mat = mat * Quaternion.from_z_rotation(math.pi/2)
         args["mat"] = mat
         args["size"] = [.005, .005, 10 * self.curr_delta.x]
@@ -265,28 +294,42 @@ class MoveFitness(SubTaskFitnessData):
 
         # Show y performance
         mat = Quaternion.from_y_rotation(math.pi/2).matrix33
-        mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle + math.pi/2)
+        # mat *= Quaternion.from_z_rotation(self.curr_angle - self.original_angle + math.pi/2)
+        mat *= Quaternion.from_z_rotation(math.pi/2)
         # mat = mat * Quaternion.from_z_rotation(math.pi/2)
         args["mat"] = mat
         args["size"] = [.005, .005, 10 * self.curr_delta.y]
         args["rgba"] = [1, 0, 0, .5]
         add_marker(**args)
 
-    def do_plots(self):
-        print(self._log_data)
-        with PdfPages(self._log.joinpath("trajectory.pdf")) as pdf:
-            fig, ax = plt.subplots()
-            plot_multicolor(
-                fig, ax,
-                self._log_data.x, self._log_data.y,
-                self._log_data.r)
-            pdf.savefig(fig)
-            fig, ax = plt.subplots()
-            plot_multicolor(
-                fig, ax,
-                self._log_data.x, self._log_data.y,
-                self._log_data.R)
-            pdf.savefig(fig)
+    def do_plots(self, path: Path):
+        with PdfPages(path.joinpath("trajectory.pdf")) as pdf:
+            pdf.savefig(self.plot_trajectory("r"))
+            pdf.savefig(self.plot_trajectory("R"))
+            pdf.savefig(self.plot_trajectory("dx"))
+            pdf.savefig(self.plot_trajectory("dy"))
+            pdf.savefig(self.plot_trajectory("dz"))
+            pdf.savefig(self.plot_trajectory("da"))
+        plt.close("all")
+
+    def plot_trajectory(self, column="R"):
+        if (d := getattr(self, "_prev_log_data", None)) is not None:
+            data = d
+        else:
+            data = self._log_data
+        matplotlib.use("agg")
+        fig, ax = plt.subplots()
+        plot_multicolor(fig, ax, data.y, data.x, data[column])
+        fig.suptitle(column)
+        x_min, x_max = data.x.quantile([0, 1])
+        y_min, y_max = data.y.quantile([0, 1])
+        r = max(-x_min, -y_min, x_max, y_max, .1) * 1.1
+        ax.set_xlim(-r, r)
+        ax.set_ylim(-r, r)
+        ax.set_xlabel("Y")
+        ax.set_ylabel("X")
+
+        return fig
 
 
 class MoveForwardFitness(MoveFitness):
@@ -300,9 +343,8 @@ class MoveBackwardFitness(MoveFitness):
 
 
 class RotateFitness(SubTaskFitnessData):
-    def __init__(self, robot, rotate_direct, render=False):
-        super().__init__(robot=robot,
-                         state=1 if rotate_direct else -1,
+    def __init__(self, rotate_direct, render=False):
+        super().__init__(state=1 if rotate_direct else -1,
                          render=render)
         self.prev_angle = None
 
@@ -321,13 +363,13 @@ class RotateFitness(SubTaskFitnessData):
 
 
 class RotateDirectFitness(RotateFitness):
-    def __init__(self, robot, render=False):
-        super().__init__(robot, True, render)
+    def __init__(self, render=False):
+        super().__init__(True, render)
 
 
 class RotateIndirectFitness(RotateFitness):
-    def __init__(self, robot, render=False):
-        super().__init__(robot, False, render)
+    def __init__(self, render=False):
+        super().__init__(False, render)
 
 
 TASKS = {
@@ -482,8 +524,10 @@ class Evaluator(Eval):
                 # pos=vec(-1, 0, .25),
                 # xyaxes="0 -1 0 0 0 1",
                 mode="track",
-                pos=vec(0, 0, 1),
-                xyaxes=str_vec(cam_right) + " " + str_vec(cam_up),
+                # pos=vec(0, 0, 1),
+                # xyaxes=str_vec(cam_right) + " " + str_vec(cam_up),
+                pos=vec(0, -2, .1),
+                xyaxes="1 0 0 0 0 1",
             )
 
         return scene

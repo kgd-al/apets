@@ -6,10 +6,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Callable
 
+import cv2
 import glfw
 import mujoco
 import yaml
-from mujoco import MjModel, MjData, Renderer
+from gymnasium.envs.mujoco import MujocoRenderer
+from mujoco import MjModel, MjData, Renderer, MjvCamera
 from mujoco.viewer import Handle, launch, launch_passive
 from mujoco_viewer import MujocoViewer
 
@@ -49,9 +51,12 @@ class StepwiseFitnessFunction(ABC):
     @property
     def invalid(self) -> bool: return False
 
+    @property
+    def infos(self) -> dict: return dict()
+
 
 class LocalSimulator:
-    @dataclass
+    @dataclass(frozen=True)
     class Parameters:
         simulation_time: int = STANDARD_SIMULATION_TIME
         simulation_timestep: float = STANDARD_SIMULATION_TIMESTEP
@@ -59,7 +64,7 @@ class LocalSimulator:
 
         label: str = None
 
-        headless: bool = False
+        headless: bool = True
         start_paused: bool = False
         cast_shadows: bool = False
         fast_sim: bool = False
@@ -103,7 +108,8 @@ class LocalSimulator:
             self._handler = _scene.handler
 
             self._parameters = dataclasses.replace(self._parameters, **parameters)
-            self._parameters.control_step = 1.0 / self._parameters.control_frequency
+            self._parameters = dataclasses.replace(
+                self._parameters, control_step=1.0 / self._parameters.control_frequency)
 
             if self._parameters.record_settings is not None:
                 os.makedirs(
@@ -126,7 +132,6 @@ class LocalSimulator:
             mujoco.mj_resetData(self._model, self._data)
 
         self._canceled = False
-        self._next_control_time = 0.0
 
         mujoco.mj_forward(self._model, self._data)
 
@@ -149,21 +154,26 @@ class LocalSimulator:
             ),
             self._control_interface, self._parameters.control_step)
 
-        self._next_control_time += self._parameters.control_step
+        # Could diverge
+        substeps = self._parameters.control_step / self._model.opt.timestep
+        assert substeps == round(substeps)
+        substeps = round(substeps)
 
         # Fast-forward to next control timestep
-        while self._data.time < self._next_control_time:
-            mujoco.mj_step(self._model, self._data)
-            # print("[MjStep]", self._data.time)
+        mujoco.mj_step(self._model, self._data, nstep=substeps)
 
         self._fitness_function.after_step(self._model, self._data)
         self._canceled |= self._fitness_function.invalid
 
     def render(self):
+        assert self._visu is not None, "Visualization not requested at initialization"
         self._canceled = self._canceled or not self._visu.render()
 
     @property
     def parameters(self): return self._parameters
+
+    @property
+    def fitness_function(self): return self._fitness_function
 
     @property
     def timeout(self): return self._data.time >= self._parameters.simulation_time
@@ -230,8 +240,8 @@ class _Visualizer:
                  parameters: LocalSimulator.Parameters,
                  render_callback: Callable = None):
 
-        self._with_viewer = not parameters.headless
         self._records = parameters.record_settings is not None
+        self._with_viewer = not parameters.headless and not self._records
         self._render_callback = render_callback
 
         self._renderer, self._viewer = None, None
@@ -239,9 +249,25 @@ class _Visualizer:
 
         self.geoms = []
 
+        self.recorder = None
+
+        self.camera = "mbs1/tracking-camera"
+
         if not self._with_viewer and self._records:  # offscreen
-            self._renderer = Renderer(model)
-            self._renderer.update_scene(self._data, "tracking-camera")
+            rs = parameters.record_settings
+            self._renderer = Renderer(model, width=rs.width, height=rs.height)
+
+            filename = str(rs.video_directory)
+            if not filename.endswith(".mp4"):
+                filename += "/movie.mp4"
+            self._video_writer = cv2.VideoWriter(
+                filename=filename,
+                fourcc=cv2.VideoWriter.fourcc(*"mp4v"),
+                fps=rs.fps,
+                frameSize=(rs.width, rs.height)
+            )
+
+            self._close = lambda: self._video_writer.release()
 
         else:
             if OLD_MUJOCO:
@@ -252,7 +278,7 @@ class _Visualizer:
                 self._close = self._viewer.close_viewer
                 backend = self._viewer._viewer_backend
                 persistent_settings_custom_mujoco_viewer(backend)
-                cam = backend.cam
+                camera = backend.cam
 
             else:
                 self._paused = False
@@ -269,12 +295,12 @@ class _Visualizer:
                     key_callback=key_event)
                 self._viewer_alive = self._viewer.is_running
                 self._close = self._viewer.close
-                cam = self._viewer.cam
+                camera = self._viewer.cam
                 self._last_step = time.time()
                 self._target_fps = 1/60.
 
-            cam.fixedcamid = data.camera("mbs1/tracking-camera").id
-            cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            camera.fixedcamid = data.camera(self.camera).id
+            camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
 
     @property
     def alive(self):
@@ -293,11 +319,13 @@ class _Visualizer:
         return path
 
     def render(self):
-        if self._render_callback is not None:
+        if self._with_viewer and self._render_callback is not None:
             self._render_callback(self._model, self._data, self._viewer)
 
         if self._renderer is not None:
-            self._renderer.update_scene(self._data)
+            self._renderer.update_scene(self._data, camera=self.camera)
+            img = self._renderer.render()
+            self._video_writer.write(img[:, :, ::-1])
 
         if self._viewer is not None:
             if not self.alive:

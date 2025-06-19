@@ -7,12 +7,14 @@ particular purpose
 
 import logging
 import math
+import pprint
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, List, Dict
 
 import PIL.Image
 import numpy as np
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import (
@@ -98,46 +100,57 @@ class TensorboardCallback(BaseCallback):
             if isinstance(formatter, TensorBoardOutputFormat)
         )
 
-        print("[kgd-debug]", self.training_env.env_method("infos"))
-        print("[kgd-debug]", self.training_env.env_method("rewards"))
+        # print("[kgd-debug]", self.training_env.env_method("infos"))
+        # print("[kgd-debug]", self.training_env.get_attr("reward"))
 
         writer = self.tb_formatter.writer
-        if self.multi_env:
-            writer.add_text(
-                "train/rewards",
-                self.prefix + ": " + self._rewards(self.training_env),
-            )
-            writer.add_text(
-                "eval/rewards",
-                self.prefix + ":" + self._rewards(self.parent.eval_env),
-            )
+        # if self.multi_env:
+        #     writer.add_text(
+        #         "train/rewards",
+        #         self.prefix + ": " + self._rewards(self.training_env),
+        #     )
+        #     writer.add_text(
+        #         "eval/rewards",
+        #         self.prefix + ":" + self._rewards(self.parent.eval_env),
+        #     )
 
         if self.num_timesteps > 0:
             return
 
-        # bodies = set(self.training_env.env_method("parameters"))
-        # print(bodies)
-        # assert len(bodies) == 1, "Non-uniform I/O types"
+        params = set(self.training_env.get_attr("parameters"))
+        assert len(params) == 1, f"Non-uniform parameters:\n{pprint.pformat(params)}"
+        params = next(iter(params))
 
         policy = self.model.policy
         hparam_dict = {
             "algorithm": self.model.__class__.__name__,
             "policy": policy.__class__.__name__,
             "learning rate": self.model.learning_rate,
-            # "body": next(iter(io_types)),
+            "body": params.label,
+            "train_envs": self.training_env.num_envs,
+            "eval_envs": self.parent.eval_env.num_envs,
         }
-        if not self.multi_env:
-            hparam_dict["rewards"] = self._rewards(self.training_env)
+        # if not self.multi_env:
+        #     hparam_dict["rewards"] = self._rewards(self.training_env)
 
         metric_dict = {
-            "infos/pretty_reward": 0.0,
+            "param/learning_rate": self.model.learning_rate,
         }
+
+        if isinstance(self.model, PPO):
+            hparam_dict.update({
+                "param/" + attr: getattr(self.model, attr)
+                for attr in [
+                    "n_steps", "batch_size", "gae_lambda", "gamma"
+                ]
+            })
 
         self.logger.record(
             "hparams",
             HParam(hparam_dict, metric_dict),
             exclude=("stdout", "log", "json", "csv"),
         )
+        self.logger.record()
 
         logger.info(f"Policy: {policy}")
         folder = Path(self.logger.dir)
@@ -168,7 +181,7 @@ class TensorboardCallback(BaseCallback):
 
     def _print_trajectory(self, env, key, name):
         images = env.env_method(
-            "plot_trajectory", verbose=True, cb_side=0, square=True
+            "plot_trajectory"#, verbose=True, cb_side=0, square=True
         )
 
         big_image = tile_images(images)
@@ -194,6 +207,10 @@ class TensorboardCallback(BaseCallback):
         # eval_infos = env_attr(env, "last_infos")
         # for key, value in _recurse_avg_dict(eval_infos, "infos").items():
         #     self.logger.record_mean(key, value)
+        assert env.num_envs == 1
+        print(env.env_method("infos"))
+        for key, value in next(iter(env.env_method("infos"))).items():
+            self.logger.record_mean(f"eval/{key}", value)
 
         print_trajectory = final or (
             self.log_trajectory_every > 0
@@ -206,27 +223,27 @@ class TensorboardCallback(BaseCallback):
 
         self.logger.dump(self.model.num_timesteps)
 
-        if final:
-            train_env = self.training_env
-            env_method(train_env, "log_trajectory", True)
-
-            logger.info("Final log step. Storing performance on training env")
-            r = evaluate_policy(model=self.model, env=train_env)
-
-            env_method(train_env, "log_trajectory", False)
-
-            t_str = "final" if final else self.img_format.format(self.num_timesteps)
-            self._print_trajectory(train_env, "train", t_str)
-
-            eval_infos = _recurse_avg_dict(eval_infos, "eval")
-            train_infos = _recurse_avg_dict(env_attr(train_env, "last_infos"), "train")
-
-            self.last_stats = {
-                "train/reward": np.average(r),
-                "eval/reward": self.parent.best_mean_reward,
-            }
-            self.last_stats.update(eval_infos)
-            self.last_stats.update(train_infos)
+        # if final:
+        #     train_env = self.training_env
+        #     env_method(train_env, "log_trajectory", True)
+        #
+        #     logger.info("Final log step. Storing performance on training env")
+        #     r = evaluate_policy(model=self.model, env=train_env)
+        #
+        #     env_method(train_env, "log_trajectory", False)
+        #
+        #     t_str = "final" if final else self.img_format.format(self.num_timesteps)
+        #     self._print_trajectory(train_env, "train", t_str)
+        #
+        #     eval_infos = _recurse_avg_dict(eval_infos, "eval")
+        #     train_infos = _recurse_avg_dict(env_attr(train_env, "last_infos"), "train")
+        #
+        #     self.last_stats = {
+        #         "train/reward": np.average(r),
+        #         "eval/reward": self.parent.best_mean_reward,
+        #     }
+        #     self.last_stats.update(eval_infos)
+        #     self.last_stats.update(train_infos)
 
         if final:
             self.logger.close()
