@@ -60,6 +60,9 @@ def vec(x, y, z): return Vector3([x, y, z], dtype=float)
 def str_vec(v: Vector3): return " ".join(f"{x:g}" for x in v)
 
 
+def krb(x, x_, c): return math.exp(c*(x-x_)**2)
+
+
 def make_custom_terrain() -> Terrain:
     s = 8
     geometries = [
@@ -148,6 +151,7 @@ class MoveFitness(SubTaskFitnessData):
                          rerun=rerun, render=render)
         self.prev_time, self.dt = None, None
         self.prev_pos = None
+        self.velocity = None
         self.original_height = None
         self.original_angle = None
         self.curr_delta = None
@@ -155,23 +159,25 @@ class MoveFitness(SubTaskFitnessData):
         self.curr_delta_angle = None
         self._invalid = False
 
-        self._infos = defaultdict(int)
+        self._infos = None
+        self._prev_infos = None
 
         self._log_trajectory = log_trajectory
         self._log_data = None
         if backup_trajectory:
             self._prev_log_data = None
-            self._prev_infos = None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
         self.original_angle = self._robot_xy_angle(data)
         self.original_height = self.robot_pos(data).z
 
+        self._prev_infos = copy.deepcopy(self._infos)
+        self._infos = self.initial_infos()
+
         if self._log_trajectory:
             if hasattr(self, "_prev_log_data") and self._log_data is not None:
                 self._prev_log_data = self._log_data.copy(True)
-                self._prev_infos = copy.deepcopy(self._infos)
 
             self._log_data = pd.DataFrame(
                 index=pd.Index([], name="t"),
@@ -189,6 +195,11 @@ class MoveFitness(SubTaskFitnessData):
         pos = self.robot_pos(data)
         self.curr_delta = pos - self.prev_pos
 
+        if self.dt == 0:
+            self.velocity = vec(0, 0, 0)
+        else:
+            self.velocity = self.curr_delta / self.dt
+
         self.curr_angle = self._robot_xy_angle(data)
         self.curr_delta_angle = self.curr_angle - self.original_angle
         # print("[kgd-debug] After step:", pos)
@@ -199,17 +210,24 @@ class MoveFitness(SubTaskFitnessData):
         # self._invalid |= (data.time > 5 and pos.z <= self.original_height)
 
         self._reward = 0
-        # self._reward += self.state * data.time * self.curr_delta.x
-        # self._reward -= .25 * abs(self.curr_delta.y)
-        # self._reward -= .25 * abs(self.curr_delta_angle)
-        self._reward += self.state * self.curr_delta.x
-        # print(f"{self.state * self.curr_delta.x * self.dt} = "
-        #       f"{self.state} * {self.curr_delta.x:.10f} * {self.dt}")
-        # self._reward += .5 * (pos.z > self.original_height)
-        # if not self._invalid:
-        #     self._reward += .1  # healthy
 
-        self._reward *= self.dt
+        # # self._reward += self.state * data.time * self.curr_delta.x
+        # # self._reward -= .25 * abs(self.curr_delta.y)
+        # # self._reward -= .25 * abs(self.curr_delta_angle)
+        # self._reward += self.state * self.curr_delta.x
+        # # print(f"{self.state * self.curr_delta.x * self.dt} = "
+        # #       f"{self.state} * {self.curr_delta.x:.10f} * {self.dt}")
+        # # self._reward += .5 * (pos.z > self.original_height)
+        # # if not self._invalid:
+        # #     self._reward += .1  # healthy
+        # self._reward *= self.dt
+
+        self._reward += krb(self.velocity.x, .5, -25) / 2
+        self._reward += krb(abs(self.velocity.y), 0, -5) / 4
+        self._reward += krb(self.velocity.z, 0, -5) / 8
+
+        self._reward += krb(pos.z - self.original_height, .05, -2e3) / 8
+
         self._fitness += self._reward
 
         if self._render and False:
@@ -221,9 +239,17 @@ class MoveFitness(SubTaskFitnessData):
             self._infos["dY"] = pos.y
             self._infos["cX"] += self.curr_delta.x
             self._infos["cY"] += self.curr_delta.y
+            self._infos["Vx"] = self.velocity.x
+            self._infos["Vy"] = self.velocity.y
+            self._infos["Vz"] = self.velocity.z
+            self._infos["speed"] = pos.x / data.time if data.time > 0 else 0
+
+    @staticmethod
+    def initial_infos():
+        return dict(dX=0, dY=0, cX=0, cY=0, Vx=0, Vy=0, Vz=0)
 
     @property
-    def infos(self): return getattr(self, "_prev_infos", self._infos)
+    def infos(self): return self._prev_infos or self._infos
 
     def _do_log(self, log, data, pos):
         log.loc[data.time] = [

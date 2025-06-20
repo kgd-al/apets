@@ -14,13 +14,14 @@ from typing import Optional, List, Dict
 
 import PIL.Image
 import numpy as np
+from matplotlib import pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import (
     Image,
     HParam,
-    TensorBoardOutputFormat,
+    TensorBoardOutputFormat, Figure,
 )
 from stable_baselines3.common.vec_env.base_vec_env import tile_images
 
@@ -129,13 +130,18 @@ class TensorboardCallback(BaseCallback):
             "body": params.label,
             "train_envs": self.training_env.num_envs,
             "eval_envs": self.parent.eval_env.num_envs,
+            "duration": params.simulation_time,
         }
         # if not self.multi_env:
         #     hparam_dict["rewards"] = self._rewards(self.training_env)
 
         metric_dict = {
-            "param/learning_rate": self.model.learning_rate,
+            "speed": 0
         }
+        metric_dict.update({
+            f"eval/{k}": v for k, v in
+            self.parent.eval_env.env_method("infos")[0].items()
+        })
 
         if isinstance(self.model, PPO):
             hparam_dict.update({
@@ -150,7 +156,6 @@ class TensorboardCallback(BaseCallback):
             HParam(hparam_dict, metric_dict),
             exclude=("stdout", "log", "json", "csv"),
         )
-        self.logger.record()
 
         logger.info(f"Policy: {policy}")
         folder = Path(self.logger.dir)
@@ -181,7 +186,7 @@ class TensorboardCallback(BaseCallback):
 
     def _print_trajectory(self, env, key, name):
         images = env.env_method(
-            "plot_trajectory"#, verbose=True, cb_side=0, square=True
+            "plot_trajectory_as_image"#, verbose=True, cb_side=0, square=True
         )
 
         big_image = tile_images(images)
@@ -196,6 +201,13 @@ class TensorboardCallback(BaseCallback):
         pil_img = PIL.Image.fromarray(big_image)
         pil_img.save(folder.joinpath(f"{key}_{name}.png"))
 
+    def _plot_trajectory(self, env):
+        assert env.num_envs == 1
+        figure = env.env_method("plot_trajectory")[0]
+        self.logger.record("infos/traj", Figure(figure, close=True),
+                           exclude=("stdout", "log", "json", "csv"))
+        plt.close(figure)
+
     def log_step(self, final: bool):
         # logger.info(
         #     f"[kgd-debug] Logging tensorboard data at time"
@@ -208,7 +220,6 @@ class TensorboardCallback(BaseCallback):
         # for key, value in _recurse_avg_dict(eval_infos, "infos").items():
         #     self.logger.record_mean(key, value)
         assert env.num_envs == 1
-        print(env.env_method("infos"))
         for key, value in next(iter(env.env_method("infos"))).items():
             self.logger.record_mean(f"eval/{key}", value)
 
@@ -220,6 +231,7 @@ class TensorboardCallback(BaseCallback):
         if print_trajectory:
             t_str = "final" if final else self.img_format.format(self.num_timesteps)
             self._print_trajectory(env, "eval", t_str)
+            self._plot_trajectory(env)
 
         self.logger.dump(self.model.num_timesteps)
 
