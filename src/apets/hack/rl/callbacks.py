@@ -10,7 +10,7 @@ import math
 import pprint
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Mapping, Any
 
 import PIL.Image
 import numpy as np
@@ -55,8 +55,11 @@ class TensorboardCallback(BaseCallback):
         max_timestep: int = 0,
         prefix: str = "",
         multi_env: bool = False,
+        args: Mapping[str, Any] = None,
     ):
         super().__init__(verbose=verbose)
+        self.args = args
+
         self.log_trajectory_every = log_trajectory_every
         fmt = (
             "{:d}"
@@ -127,21 +130,20 @@ class TensorboardCallback(BaseCallback):
             "algorithm": self.model.__class__.__name__,
             "policy": policy.__class__.__name__,
             "learning rate": self.model.learning_rate,
-            "body": params.label,
+            # "body": params.label,
             "train_envs": self.training_env.num_envs,
             "eval_envs": self.parent.eval_env.num_envs,
             "duration": params.simulation_time,
         }
+        if self.args is not None:
+            hparam_dict.update({f"config/{k}": v for k, v in self.args.items()})
         # if not self.multi_env:
         #     hparam_dict["rewards"] = self._rewards(self.training_env)
 
         metric_dict = {
-            "speed": 0
-        }
-        metric_dict.update({
             f"eval/{k}": v for k, v in
             self.parent.eval_env.env_method("infos")[0].items()
-        })
+        }
 
         if isinstance(self.model, PPO):
             hparam_dict.update({
@@ -230,7 +232,7 @@ class TensorboardCallback(BaseCallback):
 
         if print_trajectory:
             t_str = "final" if final else self.img_format.format(self.num_timesteps)
-            self._print_trajectory(env, "eval", t_str)
+            # self._print_trajectory(env, "eval", t_str)
             self._plot_trajectory(env)
 
         self.logger.dump(self.model.num_timesteps)

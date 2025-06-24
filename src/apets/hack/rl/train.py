@@ -50,7 +50,11 @@ def file_name(args):
 def env_kwargs(args, _rerun, _render, _log, _backup):
     robot = ModularRobot(body=robot_body(args.body), brain=BrainDummy())
     reward_func = MoveForwardFitness(
-        rerun=_rerun, render=_render, log_trajectory=_log, backup_trajectory=_backup)
+        reward=args.reward,
+        rerun=_rerun, render=_render,
+        log_trajectory=_log, backup_trajectory=_backup,
+        log_reward=_log,
+    )
     return dict(
         rerun=_rerun,
         render=_render,
@@ -81,7 +85,8 @@ def train(args, model_file):
     tb_callback = TensorboardCallback(
         log_trajectory_every=1,  # Eval callback (below)
         max_timestep=budget,
-        multi_env=n > 1
+        multi_env=n > 1,
+        args=vars(args)
     )
     eval_callback = EvalCallback(
         test_env,
@@ -128,7 +133,9 @@ def train(args, model_file):
 
 def rerun(args, model_file):
     print("Re-evaluating", model_file)
-    _env_kwargs = env_kwargs(args, _rerun=True, _render=True, _log=True, _backup=False)
+    render = not args.headless
+    _env_kwargs = env_kwargs(
+        args, _rerun=True, _render=render, _log=True, _backup=False)
     if args.movie:
         _env_kwargs["record_settings"] = RecordSettings(
             video_directory=model_file.parent,
@@ -141,17 +148,19 @@ def rerun(args, model_file):
 
     env = make(
        **_env_kwargs,
-       start_paused=True)
+       start_paused=not render)
     check_env(env)
 
     model = PPO.load(model_file, device="cpu")
 
     obs, infos = env.reset()
-    env.render()
+    if render:
+        env.render()
     while not env.done:
         action, _states = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
-        env.render()
+        if render:
+            env.render()
 
     env.reward_function.do_plots(model_file.parent)
 
@@ -165,6 +174,9 @@ def main():
 
     group = parser.add_argument_group("Generic")
     group.add_argument("-T", "--simulation-time", default=10, type=float)
+    group.add_argument("-R", "--reward", required=True,
+                       type=lambda _str: _str.lower(),
+                       choices=[v.name.lower() for v in MoveForwardFitness.RewardType])
 
     group = parser.add_argument_group("Training")
     group.add_argument("--body", default="spider",
@@ -187,6 +199,7 @@ def main():
     group.add_argument("--rerun", type=str, default=None,
                        const='', nargs='?')
     group.add_argument("--movie", default=False, action="store_true",)
+    group.add_argument("--headless", default=False, action="store_true",)
 
     args = parser.parse_args()
 

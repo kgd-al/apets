@@ -6,16 +6,16 @@ import math
 import numbers
 import pprint
 import time
-from collections import defaultdict
 from dataclasses import dataclass
+from enum import auto, Enum
 from pathlib import Path
 from typing import Optional, Annotated, ClassVar, Dict, Any
 
 import glfw
+import matplotlib
 import mujoco
 import pandas as pd
 import yaml
-import matplotlib
 from colorama import Style, Fore
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -143,14 +143,24 @@ class SubTaskFitnessData(StepwiseFitnessFunction):
 
 
 class MoveFitness(SubTaskFitnessData):
-    def __init__(self, forward=True,
+    class RewardType(Enum):
+        DISTANCE = auto()
+        KERNELS = auto()
+
+    def __init__(self, reward: RewardType, forward=True,
                  rerun=False, render=False,
-                 log_trajectory: bool = False,
+                 log_trajectory: bool = False, log_reward: bool = False,
                  backup_trajectory: bool = False):
         super().__init__(state=1 if forward else -1,
                          rerun=rerun, render=render)
-        self.prev_time, self.dt = None, None
+
+        if isinstance(reward, str):
+            reward = self.RewardType[reward.upper()]
+        assert reward in iter(self.RewardType)
+        self.reward_type = reward
+
         self.prev_pos = None
+        self.prev_time = None
         self.velocity = None
         self.original_height = None
         self.original_angle = None
@@ -162,10 +172,11 @@ class MoveFitness(SubTaskFitnessData):
         self._infos = None
         self._prev_infos = None
 
-        self._log_trajectory = log_trajectory
-        self._log_data = None
+        self._log_trajectory, self._data_trajectory = log_trajectory, None
         if backup_trajectory:
             self._prev_log_data = None
+
+        self._log_rewards, self._data_rewards = log_reward, None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
@@ -176,29 +187,34 @@ class MoveFitness(SubTaskFitnessData):
         self._infos = self.initial_infos()
 
         if self._log_trajectory:
-            if hasattr(self, "_prev_log_data") and self._log_data is not None:
-                self._prev_log_data = self._log_data.copy(True)
+            if hasattr(self, "_prev_log_data") and self._data_trajectory is not None:
+                self._prev_log_data = self._data_trajectory.copy(True)
 
-            self._log_data = pd.DataFrame(
+            self._data_trajectory = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=["x", "y", "dx", "dy", "dz", "da", "r", "R"])
+                columns=["x", "y", "r", "R"])
+
+        if self._log_rewards:
+            self._data_rewards = pd.DataFrame(
+                index=pd.Index([], name="t"),
+                columns=["Vx", "Vy", "Vz", "z"]
+            )
+
+        if self._log_trajectory or self._log_rewards:
             self.before_step(model, data)
             self.after_step(model, data)
 
     def before_step(self, model: MjModel, data: MjData):
-        self.prev_time = data.time
         self.prev_pos = self.robot_pos(data)
+        self.prev_time = data.time
 
     def after_step(self, model: MjModel, data: MjData):
-        self.dt = data.time - self.prev_time
+        dt = data.time - self.prev_time
 
         pos = self.robot_pos(data)
         self.curr_delta = pos - self.prev_pos
 
-        if self.dt == 0:
-            self.velocity = vec(0, 0, 0)
-        else:
-            self.velocity = self.curr_delta / self.dt
+        self.velocity = vec(0, 0, 0) if dt == 0 else self.curr_delta / dt
 
         self.curr_angle = self._robot_xy_angle(data)
         self.curr_delta_angle = self.curr_angle - self.original_angle
@@ -222,11 +238,23 @@ class MoveFitness(SubTaskFitnessData):
         # #     self._reward += .1  # healthy
         # self._reward *= self.dt
 
-        self._reward += krb(self.velocity.x, .5, -25) / 2
-        self._reward += krb(abs(self.velocity.y), 0, -5) / 4
-        self._reward += krb(self.velocity.z, 0, -5) / 8
+        match self.reward_type:
+            case self.RewardType.DISTANCE:
+                self._reward += self.state * self.curr_delta.x * dt
+            case self.RewardType.KERNELS:
+                self._reward += krb(self.velocity.x, .5, -25) / 2
+                self._reward += krb(abs(self.velocity.y), 0, -5) / 4
+                self._reward += krb(self.velocity.z, 0, -5) / 8
 
-        self._reward += krb(pos.z - self.original_height, .05, -2e3) / 8
+                self._reward += krb(pos.z - self.original_height, .05, -2e3) / 8
+
+        if self._log_rewards:
+            self._data_rewards.loc[data.time] = [
+                krb(self.velocity.x, .5, -25) / 2,
+                krb(abs(self.velocity.y), 0, -5) / 4,
+                krb(self.velocity.z, 0, -5) / 8,
+                krb(pos.z - self.original_height, .05, -2e3) / 8
+            ]
 
         self._fitness += self._reward
 
@@ -234,31 +262,19 @@ class MoveFitness(SubTaskFitnessData):
             print(f"reward(t={data.time}) = {self._reward}, total = {self._fitness}")
 
         if self._log_trajectory:
-            self._do_log(self._log_data, data, pos)
+            self._data_trajectory.loc[data.time] = [pos.x, pos.y, self._reward, self._fitness]
             self._infos["dX"] = pos.x
             self._infos["dY"] = pos.y
             self._infos["cX"] += self.curr_delta.x
             self._infos["cY"] += self.curr_delta.y
-            self._infos["Vx"] = self.velocity.x
-            self._infos["Vy"] = self.velocity.y
-            self._infos["Vz"] = self.velocity.z
             self._infos["speed"] = pos.x / data.time if data.time > 0 else 0
 
     @staticmethod
     def initial_infos():
-        return dict(dX=0, dY=0, cX=0, cY=0, Vx=0, Vy=0, Vz=0)
+        return dict(dX=0, dY=0, cX=0, cY=0, speed=0)
 
     @property
     def infos(self): return self._prev_infos or self._infos
-
-    def _do_log(self, log, data, pos):
-        log.loc[data.time] = [
-            pos.x, pos.y,
-            self.curr_delta.x, self.curr_delta.y,
-            pos.z - self.original_height,
-            self.curr_delta_angle,
-            self._reward, self._fitness
-        ]
 
     @property
     def invalid(self): return self._invalid
@@ -332,17 +348,14 @@ class MoveFitness(SubTaskFitnessData):
         with PdfPages(path.joinpath("trajectory.pdf")) as pdf:
             pdf.savefig(self.plot_trajectory("r"))
             pdf.savefig(self.plot_trajectory("R"))
-            pdf.savefig(self.plot_trajectory("dx"))
-            pdf.savefig(self.plot_trajectory("dy"))
-            pdf.savefig(self.plot_trajectory("dz"))
-            pdf.savefig(self.plot_trajectory("da"))
+            pdf.savefig(self.plot_rewards())
         plt.close("all")
 
     def plot_trajectory(self, column="R"):
         if (d := getattr(self, "_prev_log_data", None)) is not None:
             data = d
         else:
-            data = self._log_data
+            data = self._data_trajectory
         matplotlib.use("agg")
         fig, ax = plt.subplots()
         plot_multicolor(fig, ax, data.y, data.x, data[column])
@@ -355,6 +368,22 @@ class MoveFitness(SubTaskFitnessData):
         ax.set_xlabel("Y")
         ax.set_ylabel("X")
 
+        return fig
+
+    def plot_rewards(self):
+        fig, ax = plt.subplots()
+        lines = []
+        ax2 = ax.twinx()
+        lines.extend(
+            ax2.plot(self._data_rewards.index, self._data_rewards.sum(axis=1),
+                     linestyle="dashed", color='gray', label="sum")
+        )
+        for c in self._data_rewards.columns:
+            lines.extend(
+                ax.plot(self._data_rewards.index, self._data_rewards[c], label=c))
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Atomic reward")
+        ax.legend(handles=lines)
         return fig
 
 
