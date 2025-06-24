@@ -47,6 +47,13 @@ def _recurse_dict(dct, root_key):
             yield current_key, v
 
 
+def maybe_convert(v):
+    if isinstance(v, Path):
+        return str(v)
+    else:
+        return v
+
+
 class TensorboardCallback(BaseCallback):
     def __init__(
         self,
@@ -136,7 +143,7 @@ class TensorboardCallback(BaseCallback):
             "duration": params.simulation_time,
         }
         if self.args is not None:
-            hparam_dict.update({f"config/{k}": v for k, v in self.args.items()})
+            hparam_dict.update({f"config/{k}": maybe_convert(v) for k, v in self.args.items()})
         # if not self.multi_env:
         #     hparam_dict["rewards"] = self._rewards(self.training_env)
 
@@ -152,6 +159,10 @@ class TensorboardCallback(BaseCallback):
                     "n_steps", "batch_size", "gae_lambda", "gamma"
                 ]
             })
+
+        print(hparam_dict)
+        # for k, v in hparam_dict.items():
+        #     assert any(isinstance(v, t) for t in [int, float, str, bool]), f"{k}: {v} ({type(v)})"
 
         self.logger.record(
             "hparams",

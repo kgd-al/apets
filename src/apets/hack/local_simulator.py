@@ -185,6 +185,12 @@ class LocalSimulator:
     def done(self):
         return self.timeout or self.canceled
 
+    @property
+    def mj_model(self): return self._model
+
+    @property
+    def mj_data(self): return self._data
+
 
 LATEST_MUJOCO = 332
 OLD_MUJOCO = mujoco.mj_version() < LATEST_MUJOCO

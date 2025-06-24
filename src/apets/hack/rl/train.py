@@ -1,13 +1,17 @@
 import argparse
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+import pandas as pd
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import SubprocVecEnv
+from torch import nn
 
 from apets.hack.evaluator import MoveForwardFitness
 from apets.hack.rl.callbacks import EvalCallback, TensorboardCallback
@@ -146,18 +150,23 @@ def rerun(args, model_file):
             camera_id=2
         )
 
-    env = make(
-       **_env_kwargs,
-       start_paused=not render)
+    env = make(**_env_kwargs, start_paused=render)
     check_env(env)
 
     model = PPO.load(model_file, device="cpu")
 
+    model_time, steps = 0, 0
+
     obs, infos = env.reset()
     if render:
         env.render()
+
     while not env.done:
+        model_start = time.time()
         action, _states = model.predict(obs, deterministic=True)
+        model_time += time.time() - model_start
+        steps += 1
+
         obs, reward, terminated, truncated, info = env.step(action)
         if render:
             env.render()
@@ -165,6 +174,26 @@ def rerun(args, model_file):
     env.reward_function.do_plots(model_file.parent)
 
     print("Final reward:", env.cumulative_reward, "(truncated)" if env.truncated else "")
+
+    modules = [m for m in model.policy.mlp_extractor.policy_net.modules() if isinstance(m, nn.Linear)]
+
+    summary = {
+        "arch": "mlp",
+        "depth": len(modules),
+        "width": modules[0].out_features if len(modules) > 0 else np.nan,
+        "reward": args.reward,
+        "run": args.seed,
+        "body": args.body + ("45" if args.rotated else ""),
+        "params": sum(p.numel() for p in model.policy.parameters()),
+        "tps": args.simulation_time,
+    }
+    print(args.simulation_time, model_time)
+    summary.update(env.infos())
+    print(summary)
+    summary = pd.DataFrame.from_dict({k: [v] for k, v in summary.items()})
+    print(summary)
+
+    summary.to_csv(model_file.parent.joinpath("summary.csv"))
 
     # time.sleep(1)  # Ugly but prevents errors when quitting the window
 
@@ -194,6 +223,14 @@ def main():
     group.add_argument("--threads", default=None, type=int,
                        help="Number of parallel environments to use")
     group.add_argument("--overwrite", default=False, action="store_true",)
+
+    group.add_argument("--policy", choices=["mlp", "cpg"], default=None,
+                       help="Policy architecture to use. See corresponding help sections for"
+                            " parameters")
+
+    group = parser.add_argument_group("MLP Policy")
+    group.add_argument("--depth", type=int, help="Number of layers in the MLP")
+    group.add_argument("--width", type=int, help="Number of neurons per layer")
 
     group = parser.add_argument_group("Evaluation")
     group.add_argument("--rerun", type=str, default=None,

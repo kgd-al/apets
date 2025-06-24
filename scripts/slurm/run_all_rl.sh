@@ -15,27 +15,13 @@ base=$(realpath $(dirname $0)/../..)
 export SILENT_SKIP_EXISTING=1
 
 # First MLP-based
-for vision in None 6,4
+for reward in distance #kernels
 do
-    vflag=""
-    [ "$vision" != "None" ] && vflag="-vision"
-
-    for EXP in $experiments
+  for layers in 0 1 2
+  do
+    for width in 8 16 32 64 128
     do
-        exp=$(tr '[:upper:]_' '[:lower:]-' <<< $EXP)$vflag
-        duration=${durations[$EXP$vflag]}
-        export SLURM_DURATION=$duration
-        if [[ $(uname -n) =~ "ripper" ]]
-        then
-            $(dirname $0)/run.sh $exp $seeds --vision $vision --experiment $EXP \
-                --generations 100 --population 100 $@
-        else
-            for i in 0 1
-            do
-                folder=tmp/run_all_test/$exp$vflag/run-$i
-                [ -d $folder ] && continue
-                python src/main/main.py --experiment $EXP --vision "$vision" --overwrite False --seed 0 --data-root $folder $@ || exit 42
-            done
-        fi
+      $(dirname $0)/run_rl.sh ppo/spider45/mlp2 0-9 --simulation-time 30 --body spider --rotated --timesteps 200000 --reward distance --depth $layers --width $width
     done
+  done
 done
