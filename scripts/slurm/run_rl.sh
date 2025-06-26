@@ -63,11 +63,15 @@ echo "Additional arguments: $@"
 module load graphviz/12.2.1
 
 export MUJOCO_GL=egl
+set -x
 python src/apets/hack/rl/train.py --threads $threads --seed \$seed --output-folder \$data_folder $@
+set +x
 
 for ext in out err
 do
   mv -v $slurm_logs/run-\$seed.\$ext \$data_folder/slurm.\$ext
 done
+
+rmdir -p --ignore-fail-on-non-empty $slurm_logs
 
 EOF

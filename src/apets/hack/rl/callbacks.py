@@ -102,28 +102,13 @@ class TensorboardCallback(BaseCallback):
         assert isinstance(self.parent, EvalCallback)
 
         output_formats = self.logger.output_formats
-        # Save reference to tensorboard formatter object
-        # note: the failure case (not formatter found) is not handled here,
-        # should be done with try/except.
         self.tb_formatter = next(
             formatter
             for formatter in output_formats
             if isinstance(formatter, TensorBoardOutputFormat)
         )
 
-        # print("[kgd-debug]", self.training_env.env_method("infos"))
-        # print("[kgd-debug]", self.training_env.get_attr("reward"))
-
         writer = self.tb_formatter.writer
-        # if self.multi_env:
-        #     writer.add_text(
-        #         "train/rewards",
-        #         self.prefix + ": " + self._rewards(self.training_env),
-        #     )
-        #     writer.add_text(
-        #         "eval/rewards",
-        #         self.prefix + ":" + self._rewards(self.parent.eval_env),
-        #     )
 
         if self.num_timesteps > 0:
             return
@@ -144,8 +129,6 @@ class TensorboardCallback(BaseCallback):
         }
         if self.args is not None:
             hparam_dict.update({f"config/{k}": maybe_convert(v) for k, v in self.args.items()})
-        # if not self.multi_env:
-        #     hparam_dict["rewards"] = self._rewards(self.training_env)
 
         metric_dict = {
             f"eval/{k}": v for k, v in
@@ -159,10 +142,6 @@ class TensorboardCallback(BaseCallback):
                     "n_steps", "batch_size", "gae_lambda", "gamma"
                 ]
             })
-
-        print(hparam_dict)
-        # for k, v in hparam_dict.items():
-        #     assert any(isinstance(v, t) for t in [int, float, str, bool]), f"{k}: {v} ({type(v)})"
 
         self.logger.record(
             "hparams",
@@ -180,27 +159,12 @@ class TensorboardCallback(BaseCallback):
             "policy", str(policy).replace("\n", "<br/>").replace(" ", "&nbsp;")
         )
 
-        # dummy_inputs = \
-        #     policy.obs_to_tensor(policy.observation_space.sample())[0]
-        # writer.add_graph(policy, dummy_inputs, use_strict_trace=False)
-        #
-        # graph = to_dot(policy)
-        # graph.render(folder.joinpath("policy"), format='pdf', cleanup=True)
-        # graph.render(folder.joinpath("policy"), format='png', cleanup=True)
-        # # noinspection PyTypeChecker
-        # writer.add_image(
-        #     "policy",
-        #     np.asarray(PIL.Image.open(BytesIO(graph.pipe(format='jpg')))),
-        #     dataformats="HWC", global_step=0)
-
     def _on_step(self) -> bool:
         self.log_step(False)
         return True
 
     def _print_trajectory(self, env, key, name):
-        images = env.env_method(
-            "plot_trajectory_as_image"#, verbose=True, cb_side=0, square=True
-        )
+        images = env.env_method("plot_trajectory_as_image")
 
         big_image = tile_images(images)
 
@@ -222,18 +186,11 @@ class TensorboardCallback(BaseCallback):
         plt.close(figure)
 
     def log_step(self, final: bool):
-        # logger.info(
-        #     f"[kgd-debug] Logging tensorboard data at time"
-        #     f" {self.num_timesteps} {self.model.num_timesteps} ({final=})")
-
         assert isinstance(self.parent, EvalCallback)
         env = self.parent.eval_env
 
-        # eval_infos = env_attr(env, "last_infos")
-        # for key, value in _recurse_avg_dict(eval_infos, "infos").items():
-        #     self.logger.record_mean(key, value)
         assert env.num_envs == 1
-        for key, value in next(iter(env.env_method("infos"))).items():
+        for key, value in next(iter(env.env_method("previous_infos"))).items():
             self.logger.record_mean(f"eval/{key}", value)
 
         print_trajectory = final or (
@@ -242,33 +199,9 @@ class TensorboardCallback(BaseCallback):
         )
 
         if print_trajectory:
-            t_str = "final" if final else self.img_format.format(self.num_timesteps)
-            # self._print_trajectory(env, "eval", t_str)
             self._plot_trajectory(env)
 
         self.logger.dump(self.model.num_timesteps)
-
-        # if final:
-        #     train_env = self.training_env
-        #     env_method(train_env, "log_trajectory", True)
-        #
-        #     logger.info("Final log step. Storing performance on training env")
-        #     r = evaluate_policy(model=self.model, env=train_env)
-        #
-        #     env_method(train_env, "log_trajectory", False)
-        #
-        #     t_str = "final" if final else self.img_format.format(self.num_timesteps)
-        #     self._print_trajectory(train_env, "train", t_str)
-        #
-        #     eval_infos = _recurse_avg_dict(eval_infos, "eval")
-        #     train_infos = _recurse_avg_dict(env_attr(train_env, "last_infos"), "train")
-        #
-        #     self.last_stats = {
-        #         "train/reward": np.average(r),
-        #         "eval/reward": self.parent.best_mean_reward,
-        #     }
-        #     self.last_stats.update(eval_infos)
-        #     self.last_stats.update(train_infos)
 
         if final:
             self.logger.close()

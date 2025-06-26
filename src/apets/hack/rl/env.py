@@ -77,6 +77,8 @@ class GymSimulator(LocalSimulator, gym.Env):
 
     def infos(self): return dict(**self.reward_function.infos)
 
+    def previous_infos(self): return dict(**self.reward_function.previous_infos)
+
     @property
     def reward_function(self): return self.fitness_function
 

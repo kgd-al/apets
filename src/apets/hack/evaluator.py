@@ -240,7 +240,7 @@ class MoveFitness(SubTaskFitnessData):
 
         match self.reward_type:
             case self.RewardType.DISTANCE:
-                self._reward += self.state * self.curr_delta.x * dt
+                self._reward += self.state * self.curr_delta.x
             case self.RewardType.KERNELS:
                 self._reward += krb(self.velocity.x, .5, -25) / 2
                 self._reward += krb(abs(self.velocity.y), 0, -5) / 4
@@ -274,7 +274,10 @@ class MoveFitness(SubTaskFitnessData):
         return dict(dX=0, dY=0, cX=0, cY=0, speed=0)
 
     @property
-    def infos(self): return self._prev_infos or self._infos
+    def infos(self): return self._infos
+
+    @property
+    def previous_infos(self): return self._prev_infos
 
     @property
     def invalid(self): return self._invalid

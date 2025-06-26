@@ -103,6 +103,16 @@ def train(args, model_file):
         callback_after_eval=tb_callback,
     )
 
+    if args.policy == "mlp":
+        if args.width is None:
+            args.width = 64
+        if args.depth is None:
+            args.depth = 2
+        nn_layers = [args.width for _ in range(args.depth)]
+        policy_kwargs = dict(net_arch=dict(pi=nn_layers, vf=nn_layers))
+    else:
+        raise NotImplementedError(f"{args.policy}-based control not implemented")
+
     # Define and Train the agent
     trainer = TRAINERS[args.trainer]
     model = trainer(
@@ -116,6 +126,8 @@ def train(args, model_file):
         gae_lambda=0.95,
         gamma=0.99,
         learning_rate=2.5e-4,
+
+        policy_kwargs=policy_kwargs,
     )
 
     model.set_logger(configure(str(folder), ["csv", "tensorboard"]))
@@ -155,19 +167,17 @@ def rerun(args, model_file):
 
     model = PPO.load(model_file, device="cpu")
 
-    model_time, steps = 0, 0
+    start_time, steps = time.time(), 0
 
     obs, infos = env.reset()
     if render:
         env.render()
 
     while not env.done:
-        model_start = time.time()
         action, _states = model.predict(obs, deterministic=True)
-        model_time += time.time() - model_start
         steps += 1
 
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, terminated, truncated, infos = env.step(action)
         if render:
             env.render()
 
@@ -185,13 +195,11 @@ def rerun(args, model_file):
         "run": args.seed,
         "body": args.body + ("45" if args.rotated else ""),
         "params": sum(p.numel() for p in model.policy.parameters()),
-        "tps": args.simulation_time,
+        "tps": steps / (time.time() - start_time),
     }
-    print(args.simulation_time, model_time)
-    summary.update(env.infos())
-    print(summary)
+    summary.update(env.reward_function.infos)
     summary = pd.DataFrame.from_dict({k: [v] for k, v in summary.items()})
-    print(summary)
+    summary.index = [model_file.parent]
 
     summary.to_csv(model_file.parent.joinpath("summary.csv"))
 

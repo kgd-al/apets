@@ -14,14 +14,34 @@ base=$(realpath $(dirname $0)/../..)
 
 export SILENT_SKIP_EXISTING=1
 
-# First MLP-based
-for reward in distance #kernels
-do
-  for layers in 0 1 2
+prefix(){
+  printf "[%s] " "$(date)"
+}
+
+(
+  # First MLP-based
+  for reward in distance #kernels
   do
-    for width in 8 16 32 64 128
+    echo $reward/mlp-0-0 $seeds --reward $reward --policy mlp --depth 0 $@
+
+    for layers in 1 2
     do
-      $(dirname $0)/run_rl.sh ppo/spider45/mlp2 0-9 --simulation-time 30 --body spider --rotated --timesteps 200000 --reward distance --depth $layers --width $width
+      for width in 1 2 4 8 16 32 64 128
+      do
+        echo $reward/mlp-${layers}-${width} $seeds --reward $reward --policy mlp --depth $layers --width $width $@
+      done
     done
   done
+) | while read cmd
+do
+  while [ $(squeue -u kgd| wc -l) -gt 10 ]
+  do
+    prefix
+    printf "Waiting for some room in queue\r"
+    sleep 10
+  done
+
+  prefix
+  $(dirname $0)/run_rl.sh $cmd
+  sleep 1
 done
