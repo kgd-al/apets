@@ -116,6 +116,7 @@ torch==2.7.0
 tqdm==4.67.1
 triton==3.3.0
 typed-argparse==0.3.1
+types-pytz==2025.2.0.20250516
 typing_extensions==4.12.2
 tzdata==2024.2
 urllib3==2.3.0

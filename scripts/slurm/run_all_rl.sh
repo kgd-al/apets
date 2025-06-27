@@ -20,7 +20,7 @@ prefix(){
 
 (
   # First MLP-based
-  for reward in distance #kernels
+  for reward in distance kernels
   do
     echo $reward/mlp-0-0 $seeds --reward $reward --policy mlp --depth 0 $@
 
@@ -34,7 +34,7 @@ prefix(){
   done
 ) | while read cmd
 do
-  while [ $(squeue -u kgd| wc -l) -gt 10 ]
+  while [ $(squeue -u kgd| wc -l) -gt 20 ]
   do
     prefix
     printf "Waiting for some room in queue\r"
