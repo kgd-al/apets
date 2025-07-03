@@ -10,12 +10,15 @@ from pathlib import Path
 import cma
 import graphviz
 import matplotlib
+import numpy as np
 import pandas as pd
 
 from apets.hack.body import compute_positions
 from apets.hack.cma_es.env import Environment
 from apets.hack.evaluator import MoveForwardFitness
-from revolve2.modular_robot.body.base import ActiveHinge, Core, Brick
+from revolve2.modular_robot.body import Module
+from revolve2.modular_robot.body.base import ActiveHinge, Core, Brick, AttachmentFace
+from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2
 from revolve2.modular_robot.brain.cpg import (
     active_hinges_to_cpg_network_structure_neighbor,
 )
@@ -25,33 +28,57 @@ from revolve2.standards.simulation_parameters import STANDARD_CONTROL_FREQUENCY
 
 folder = Path("tmp/cpg_study/")
 folder.mkdir(parents=True, exist_ok=True)
+print(folder.absolute())
 
 
-def bco(body_name, neighborhood):
-    body = modular_robots_v2.get(body_name)
+def __fixed_neighbors(self, within_range: int) -> list[Module]:
+    """
+    Get the neighbours of this module with a certain range of the module tree.
 
-    # Find all active hinges in the body
-    active_hinges = body.find_modules_of_type(ActiveHinge)
+    :param within_range: The range in which modules are considered a neighbour. Minimum is 1.
+    :returns: The neighbouring modules.
+    """
+    queue, seen = [(self, 0)], set()
 
-    modules_pos = {
-        m: p for m, p in compute_positions(body).items()
-    }
-    active_hinges = [m for m in modules_pos if isinstance(m, ActiveHinge)]
+    while queue:
+        module, depth = queue.pop()
+        seen.add(module)
 
-    # Create a structure for the CPG network from these hinges.
-    # This also returns a mapping between active hinges and the index of there corresponding cpg in the network.
-    (
-        cpg_network_structure,
-        output_mapping,
-    ) = active_hinges_to_cpg_network_structure_neighbor(active_hinges, neighborhood)
+        if depth < within_range:
+            if isinstance(module, AttachmentFace) and isinstance(module.parent, Core):
+                modules = [
+                    m
+                    for face in module.parent.attachment_faces.values()
+                    for m in face.children.values()
+                    if face is not module
+                ]
+            else:
+                modules = list(module.children.values()) + [module.parent]
 
-    _s = cpg_network_structure
-    print(f"> {_s.num_cpgs=}, {_s.num_connections=}, {_s.num_states=}")
+            queue.extend([
+                (mod, depth+1)
+                for mod in modules
+                if mod is not None and mod not in seen
+            ])
+    seen.remove(self)
+    return list(seen)
+Module.neighbours = __fixed_neighbors
 
+
+def real_snake(l=3):
+    body = BodyV2()
+    module = body.core_v2.back_face.bottom = ActiveHingeV2(0.0)
+    for _ in range(l-1):
+        module.attachment = ActiveHingeV2(0.0)
+        module = module.attachment
+    return body
+
+
+def to_dot(modules_pos, active_hinges, cpg_network_structure, filename):
     dot = graphviz.Graph(
         "CPG", "connectivity pattern",
         engine="neato",
-        graph_attr=dict(overlap="scale", outputorder="edgesfirst"),
+        graph_attr=dict(overlap="scale", outputorder="edgesfirst", splines="true"),
         node_attr=dict(style="filled", fillcolor="white"),
         # edge_attr=dict(dir="both")
     )
@@ -68,7 +95,12 @@ def bco(body_name, neighborhood):
         elif isinstance(m, Brick):
             name = f"B_{i}"
             style = dict(shape="rectangle", color="blue")
-        dot.node(name=name, pos=pos, **style)
+        if "_" in name:
+            tokens = name.split("_")
+            label = "".join(["<", tokens[0], "<sub>", tokens[1], "</sub>>"])
+        else:
+            label = name
+        dot.node(name=name, label=label, pos=pos, **style)
 
     # for c in cpg_network_structure.cpgs:
     #     pos = modules_pos[active_hinges[c.index]]
@@ -77,17 +109,42 @@ def bco(body_name, neighborhood):
         dot.edge(f"H_{c.cpg_index_lowest.index}", f"H_{c.cpg_index_highest.index}")
 
     print(dot.source)
-    dot.render(outfile=folder.joinpath(f"{body_name}-n{neighborhood}.png"),
-               cleanup=True)
+    dot.render(outfile=filename, cleanup=True)
+
+
+def bco(body_name, neighborhood):
+    if body_name == "real_snake":
+        body = real_snake(5)
+    else:
+        body = modular_robots_v2.get(body_name)
+
+    modules_pos = {
+        m: p for m, p in compute_positions(body).items()
+    }
+    active_hinges = [m for m in modules_pos if isinstance(m, ActiveHinge)]
+
+    # Create a structure for the CPG network from these hinges.
+    # This also returns a mapping between active hinges and the index of there corresponding cpg in the network.
+    (
+        cpg_network_structure,
+        output_mapping,
+    ) = active_hinges_to_cpg_network_structure_neighbor(active_hinges, neighborhood)
+
+    _s = cpg_network_structure
+    # print(f"> {_s.num_cpgs=}, {_s.num_connections=}, {_s.num_states=}")
+    # to_dot(modules_pos, active_hinges, cpg_network_structure, folder.joinpath(f"{body_name}-n{neighborhood}.png"))
 
     return body, cpg_network_structure, output_mapping
 
 
-
-for i in range(5):
-    print(f"Neighborhood={i}")
-    bco("spider", i)
-exit(42)
+# # for body in ["spider"]:#["real_snake", "snake", "spider"]:
+# #     for i in [1, 2]:#range(6):
+# for body in ["real_snake", "snake", "spider"]:
+#     for i in range(7):
+#         # print(f"{body}-{i}")
+#         _b, _s, _m = bco(body, i)
+#         print(f"{body}-{i}: {_s.num_connections}")
+# exit(42)
 
 
 def evolve(args):
@@ -227,7 +284,7 @@ def main() -> None:
                        help="Number of parallel environments to use")
     group.add_argument("--overwrite", default=False, action="store_true", )
 
-    group.add_argument("--neighborhood", type=int, default=2, choices=[1, 2, 3],
+    group.add_argument("--neighborhood", type=int, default=2,
                        help="Neighborhood size for CPG network connectivity")
     group.add_argument("--initial-std", type=float, default=.5,
                        help="Initial standard deviation for CMA-ES")

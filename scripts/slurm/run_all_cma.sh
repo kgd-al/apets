@@ -21,9 +21,9 @@ prefix(){
 (
   for reward in distance kernels
   do
-    for neighborhood in 1 2 3
+    for neighborhood in 0 2 4 6
     do
-      echo $reward/cpg-$neighborhood $seeds --reward $reward --neighborhood $neighborhoodls $@
+      echo $reward/cpg-$neighborhood $seeds --reward $reward --neighborhood $neighborhood $@
     done
   done
 ) | while read cmd

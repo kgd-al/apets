@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -32,18 +33,16 @@ with PdfPages(pdf_file) as pdf:
     pdf.savefig(g.figure, bbox_inches="tight")
     plt.close()
 
+    def hue():
+        return df.arch + df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else "")
+
     def plot(x, y, base=10, **kwargs):
-        _args = dict(x=x, y=y, hue="depth", col="reward", row="arch",
+        _args = dict(x=x, y=y, hue=hue(), col="reward",
                      kind='line', err_style="bars", marker='o')
+
         _args.update(kwargs)
         g = sns.relplot(df, **_args)
         plt.xscale('log', base=base)
-
-        del _args["col"]
-        del _args["row"]
-        del _args["kind"]
-        _args["hue"] = "neighborhood"
-        g.map_dataframe(sns.lineplot, **_args)
 
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
