@@ -18,9 +18,6 @@ df = pd.concat(
 )
 
 print(df)
-print(df[df.depth==0])
-df.depth = df.depth.astype(str)
-print(df.dtypes)
 
 sns.set_style("darkgrid")
 pdf_file = args.root[0].joinpath("summary.pdf")
@@ -35,14 +32,24 @@ with PdfPages(pdf_file) as pdf:
     pdf.savefig(g.figure, bbox_inches="tight")
     plt.close()
 
-    def plot(x, y, base=10):
-        g = sns.relplot(df, x=x, y=y, hue="depth", col="reward",
-                        kind='line', err_style="bars", marker='o')
+    def plot(x, y, base=10, **kwargs):
+        _args = dict(x=x, y=y, hue="depth", col="reward", row="arch",
+                     kind='line', err_style="bars", marker='o')
+        _args.update(kwargs)
+        g = sns.relplot(df, **_args)
         plt.xscale('log', base=base)
+
+        del _args["col"]
+        del _args["row"]
+        del _args["kind"]
+        _args["hue"] = "neighborhood"
+        g.map_dataframe(sns.lineplot, **_args)
+
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
     plot(x="params", y="speed")
+    plot(x="params", y="speed", errorbar=("pi", 100), err_style="band")
     # plot(x="width", y="speed", base=2)
     plot(x="params", y="tps")
     # plot(x="width", y="tps", base=2)

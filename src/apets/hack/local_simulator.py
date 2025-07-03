@@ -137,6 +137,15 @@ class LocalSimulator:
 
         self._fitness_function.reset(self._model, self._data)
 
+    def run(self, render: bool = False):
+        if render:
+            self.render()
+
+        while not self.done:
+            self.step()
+            if render:
+                self.render()
+
     def step(self):
         if self._visu is not None and not self._visu.alive:
             self._canceled = True
