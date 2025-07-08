@@ -1,11 +1,12 @@
 import functools
 import math
-import multiprocessing
+import pprint
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
+from apets.hack.body import compute_positions
 from apets.hack.evaluator import MoveForwardFitness, Evaluator
 from apets.hack.local_simulator import LocalSimulator, StepwiseFitnessFunction
 from revolve2.modular_robot import ModularRobot
@@ -39,9 +40,11 @@ class Environment:
             ),
         )
 
-        return self.evaluate_one(
+        res = self.evaluate_one(
             Evaluator.scene(robot, rerun=self.rerun, rotation=self.rotated)
         )
+
+        return res
 
     @staticmethod
     def _evaluate(scene: ModularRobotScene, reward, **kwargs):

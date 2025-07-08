@@ -151,6 +151,12 @@ def evolve(args):
     folder = args.output_folder
     folder_str = str(folder) + "/"
 
+    with open(folder.joinpath("config.json"), "wt") as f:
+        config = vars(args).copy()
+        config["output_folder"] = str(args.output_folder)
+        print("Configuration:", pprint.pformat(config))
+        f.write(json.dumps(config))
+
     body, cpg_network_structure, output_mapping = bco(args.body, args.neighborhood)
     evaluator = Environment(
         body=body,
@@ -166,14 +172,12 @@ def evolve(args):
     initial_mean = cpg_network_structure.num_connections * [0.5]
 
     # We use the CMA-ES optimizer from the cma python package.
-    # Initialize the cma optimizer.
     options = cma.CMAOptions()
     options.set("verb_filenameprefix", folder_str)
     options.set("bounds", [-1.0, 1.0])
-    # The cma package uses its own internal rng.
-    # Instead of creating our own numpy rng, we use our seed to initialize cma.
     options.set("seed", args.seed)
     es = cma.CMAEvolutionStrategy(initial_mean, args.initial_std, options)
+    args.threads = 0
     es.optimize(evaluator.evaluate, maxfun=args.budget, n_jobs=args.threads, verb_disp=1)
     with open(folder.joinpath("cma-es.pkl"), "wb") as f:
         f.write(es.pickle_dumps())
@@ -185,11 +189,10 @@ def evolve(args):
     cma.s.figsave(folder.joinpath('plot.png'), bbox_inches='tight')  # save current figure
     cma.s.figsave(folder.joinpath('plot.pdf'), bbox_inches='tight')  # save current figure
 
-    rerun_fitness = rerun(args)
-
+    rerun_fitness = evaluator.evaluate(res.xbest)
     if rerun_fitness != res.fbest:
         print("Different fitness value on rerun:")
-        pprint.pprint(res)
+        print(res.fbest, res.xbest)
         print("Rerun:", rerun_fitness)
 
     args.evolution_simulation_time = args.simulation_time
@@ -308,12 +311,6 @@ def main() -> None:
         elif args.rerun is None:
             raise ValueError(f"Log folder '{folder}' already exists and overwriting was not requested")
     folder.mkdir(parents=True, exist_ok=True)
-
-    with open(folder.joinpath("config.json"), "wt") as f:
-        config = vars(args).copy()
-        config["output_folder"] = str(args.output_folder)
-        print("Configuration:", pprint.pformat(config))
-        f.write(json.dumps(config))
 
     if _rerun:
         rerun(args)
