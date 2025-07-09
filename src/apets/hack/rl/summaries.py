@@ -6,7 +6,6 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from sympy.codegen.ast import int64
 
 parser = argparse.ArgumentParser("Sumarizes summary.csv files")
 parser.add_argument("root", type=Path, nargs="+")

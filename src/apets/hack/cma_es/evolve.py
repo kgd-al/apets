@@ -174,10 +174,10 @@ def evolve(args):
     # We use the CMA-ES optimizer from the cma python package.
     options = cma.CMAOptions()
     options.set("verb_filenameprefix", folder_str)
-    options.set("bounds", [-1.0, 1.0])
+    # options.set("bounds", [-1.0, 1.0])
     options.set("seed", args.seed)
     es = cma.CMAEvolutionStrategy(initial_mean, args.initial_std, options)
-    args.threads = 0
+    # args.threads = 0
     es.optimize(evaluator.evaluate, maxfun=args.budget, n_jobs=args.threads, verb_disp=1)
     with open(folder.joinpath("cma-es.pkl"), "wb") as f:
         f.write(es.pickle_dumps())

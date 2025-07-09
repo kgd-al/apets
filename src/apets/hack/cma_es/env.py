@@ -1,6 +1,7 @@
 import functools
 import math
 import pprint
+from hashlib import sha1
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +44,13 @@ class Environment:
         res = self.evaluate_one(
             Evaluator.scene(robot, rerun=self.rerun, rotation=self.rotated)
         )
+
+        # weights_np_str = np.array2string(
+        #     robot.brain.make_instance()._weight_matrix,
+        #     precision=2, separator=',', suppress_small=True,
+        #     floatmode="maxprec", max_line_width=1000
+        # )
+        # print(f"-- {res} - {sha1(weights).hexdigest()}:\n{weights_np_str}")
 
         return res
 
