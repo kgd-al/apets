@@ -26,10 +26,6 @@ from revolve2.simulation.simulator import RecordSettings
 from revolve2.standards import modular_robots_v2
 from revolve2.standards.simulation_parameters import STANDARD_CONTROL_FREQUENCY
 
-folder = Path("tmp/cpg_study/")
-folder.mkdir(parents=True, exist_ok=True)
-print(folder.absolute())
-
 
 def __fixed_neighbors(self, within_range: int) -> list[Module]:
     """
@@ -65,58 +61,8 @@ def __fixed_neighbors(self, within_range: int) -> list[Module]:
 Module.neighbours = __fixed_neighbors
 
 
-def real_snake(l=3):
-    body = BodyV2()
-    module = body.core_v2.back_face.bottom = ActiveHingeV2(0.0)
-    for _ in range(l-1):
-        module.attachment = ActiveHingeV2(0.0)
-        module = module.attachment
-    return body
-
-
-def to_dot(modules_pos, active_hinges, cpg_network_structure, filename):
-    dot = graphviz.Graph(
-        "CPG", "connectivity pattern",
-        engine="neato",
-        graph_attr=dict(overlap="scale", outputorder="edgesfirst", splines="true"),
-        node_attr=dict(style="filled", fillcolor="white"),
-        # edge_attr=dict(dir="both")
-    )
-
-    for i, (m, p) in enumerate(modules_pos.items()):
-        pos = f"{p.x},{p.y}!"
-        name, style = None, None
-        if isinstance(m, Core):
-            name = "Core"
-            style = dict(shape="rectangle", color="red")
-        elif isinstance(m, ActiveHinge):
-            name = f"H_{active_hinges.index(m)}"
-            style = dict(shape="circle")
-        elif isinstance(m, Brick):
-            name = f"B_{i}"
-            style = dict(shape="rectangle", color="blue")
-        if "_" in name:
-            tokens = name.split("_")
-            label = "".join(["<", tokens[0], "<sub>", tokens[1], "</sub>>"])
-        else:
-            label = name
-        dot.node(name=name, label=label, pos=pos, **style)
-
-    # for c in cpg_network_structure.cpgs:
-    #     pos = modules_pos[active_hinges[c.index]]
-    #     dot.node(name=str(c.index), pos=f"{pos.x},{pos.y}!")
-    for c in cpg_network_structure.connections:
-        dot.edge(f"H_{c.cpg_index_lowest.index}", f"H_{c.cpg_index_highest.index}")
-
-    print(dot.source)
-    dot.render(outfile=filename, cleanup=True)
-
-
 def bco(body_name, neighborhood):
-    if body_name == "real_snake":
-        body = real_snake(5)
-    else:
-        body = modular_robots_v2.get(body_name)
+    body = modular_robots_v2.get(body_name)
 
     modules_pos = {
         m: p for m, p in compute_positions(body).items()
@@ -137,14 +83,37 @@ def bco(body_name, neighborhood):
     return body, cpg_network_structure, output_mapping
 
 
-# # for body in ["spider"]:#["real_snake", "snake", "spider"]:
-# #     for i in [1, 2]:#range(6):
-# for body in ["real_snake", "snake", "spider"]:
-#     for i in range(7):
-#         # print(f"{body}-{i}")
-#         _b, _s, _m = bco(body, i)
-#         print(f"{body}-{i}: {_s.num_connections}")
-# exit(42)
+def environment_arguments(args):
+    env_args = dict(
+        arch=args.arch,
+        reward=args.reward,
+
+        simulation_time=args.simulation_time,
+        rotated=args.rotated,
+    )
+
+    if args.arch == "mlp":
+        body = modular_robots_v2.get(args.body)
+        assert args.depth is not None
+        assert args.width is not None
+        env_args.update(dict(
+            body=body,
+            mlp_depth=args.depth,
+            mlp_width=args.width,
+        ))
+
+    elif args.arch == "cpg":
+        body, cpg_network_structure, output_mapping = bco(args.body, args.neighborhood)
+        env_args.update(dict(
+            body=body,
+            cpg_network_structure=cpg_network_structure,
+            output_mapping=output_mapping,
+        ))
+
+    else:
+        raise ValueError(f"Unknown architecture: {args.arch}")
+
+    return env_args
 
 
 def evolve(args):
@@ -157,25 +126,20 @@ def evolve(args):
         print("Configuration:", pprint.pformat(config))
         f.write(json.dumps(config))
 
-    body, cpg_network_structure, output_mapping = bco(args.body, args.neighborhood)
-    evaluator = Environment(
-        body=body,
-        reward=args.reward,
-        cpg_network_structure=cpg_network_structure,
-        output_mapping=output_mapping,
+    env_args = environment_arguments(args)
 
-        simulation_time=args.simulation_time,
-        rotated=args.rotated,
-    )
+    evaluator = Environment(**env_args)
 
     # Initial parameter values for the brain.
-    initial_mean = cpg_network_structure.num_connections * [0.5]
+    initial_mean = evaluator.num_parameters * [0.5]
 
     # We use the CMA-ES optimizer from the cma python package.
     options = cma.CMAOptions()
     options.set("verb_filenameprefix", folder_str)
     # options.set("bounds", [-1.0, 1.0])
     options.set("seed", args.seed)
+    options.set("tolfun", 0)
+    options.set("tolflatfitness", 10)
     es = cma.CMAEvolutionStrategy(initial_mean, args.initial_std, options)
     # args.threads = 0
     es.optimize(evaluator.evaluate, maxfun=args.budget, n_jobs=args.threads, verb_disp=1)
@@ -203,24 +167,21 @@ def evolve(args):
 
 def rerun(args):
     folder = args.output_folder
-    body, cpg_network_structure, output_mapping = bco(args.body, args.neighborhood)
+    # with open(folder.joinpath("config.json"), "rt") as f:
+    #     config = vars(args).copy()
+    #     config["output_folder"] = str(args.output_folder)
+    #     print("Configuration:", pprint.pformat(config))
+    #     f.write(json.dumps(config))
 
-    env_kwargs = dict(
-        body=body,
-        reward=args.reward,
-        cpg_network_structure=cpg_network_structure,
-        output_mapping=output_mapping,
-
-        simulation_time=args.simulation_time,
-        rotated=args.rotated,
-
+    env_kwargs = environment_arguments(args)
+    env_kwargs.update(dict(
         rerun=True,
         render=not args.headless or args.movie, headless=args.headless,
         log_trajectory=True, log_reward=True,
         plot_path=folder,
 
         return_ff=True,
-    )
+    ))
     if args.movie:
         env_kwargs["record_settings"] = RecordSettings(
             video_directory=folder,
@@ -244,15 +205,22 @@ def rerun(args):
                          * STANDARD_CONTROL_FREQUENCY)
 
     summary = {
-        "arch": "cpg",
+        "arch": args.arch,
         "budget": args.budget * steps_per_episode,
-        "neighborhood": args.neighborhood,
+        "neighborhood": np.nan,
+        "width": np.nan,
+        "depth": np.nan,
         "reward": args.reward,
         "run": args.seed,
         "body": args.body + ("45" if args.rotated else ""),
-        "params": cpg_network_structure.num_connections,
+        "params": evaluator.num_parameters,
         "tps": steps_per_episode / (time.time() - start_time),
     }
+    if args.arch == "mlp":
+        summary["width"] = args.width
+        summary["depth"] = args.depth
+    elif args.arch == "cpg":
+        summary["neighborhood"] = args.neighborhood
     summary.update(fitness_function.infos)
     summary = pd.DataFrame.from_dict({k: [v] for k, v in summary.items()})
     summary.index = [folder]
@@ -287,10 +255,15 @@ def main() -> None:
                        help="Number of parallel environments to use")
     group.add_argument("--overwrite", default=False, action="store_true", )
 
-    group.add_argument("--neighborhood", type=int, default=2,
+    group.add_argument("--neighborhood", type=int,
                        help="Neighborhood size for CPG network connectivity")
+    group.add_argument("--depth", type=int, help="Number of layers in the MLP")
+    group.add_argument("--width", type=int, help="Number of neurons per layer")
     group.add_argument("--initial-std", type=float, default=.5,
                        help="Initial standard deviation for CMA-ES")
+
+    group.add_argument("--arch", choices=["mlp", "cpg"], required=True,
+                       help="Policy architecture to use")
 
     group = parser.add_argument_group("Evaluation")
     group.add_argument("--rerun", type=str, default=None,
@@ -316,6 +289,12 @@ def main() -> None:
         rerun(args)
     else:
         assert args.headless is True
+        if args.arch == "cpg":
+            assert args.neighborhood is not None
+        if args.arch == "mlp":
+            assert args.width is not None
+            assert args.depth is not None
+
         evolve(args)
 
 

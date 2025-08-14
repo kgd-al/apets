@@ -171,7 +171,8 @@ class LocalSimulator:
         # Fast-forward to next control timestep
         mujoco.mj_step(self._model, self._data, nstep=substeps)
 
-        self._fitness_function.after_step(self._model, self._data)
+        if not self.done:
+            self._fitness_function.after_step(self._model, self._data)
         self._canceled |= self._fitness_function.invalid
 
     def render(self):

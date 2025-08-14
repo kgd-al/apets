@@ -17,6 +17,7 @@ df = pd.concat(
     for f in root.glob("**/summary.csv")
 )
 
+print(df.columns)
 print(df)
 
 sns.set_style("darkgrid")
@@ -32,12 +33,21 @@ with PdfPages(pdf_file) as pdf:
     pdf.savefig(g.figure, bbox_inches="tight")
     plt.close()
 
-    def hue():
-        return df.arch + df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else "")
+    def hue(overview):
+        def fmt_rl(_s):
+            trainer = _s.split("/")[4]
+            if trainer == "rlearn":
+                trainer = "ppo"
+            return trainer
+        r = df.arch + "-" + df.index.map(fmt_rl)
+        if not overview:
+            r += df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else "")
+        return r
 
     def plot(x, y, base=10, **kwargs):
-        _args = dict(x=x, y=y, hue=hue(), col="reward",
-                     kind='line', err_style="bars", marker='o')
+        _args = dict(x=x, y=y, hue=hue(kwargs.pop("overview", False)), col="reward",
+                     kind='line', marker='o',
+                     err_style="bars", errorbar="sd")
 
         _args.update(kwargs)
         g = sns.relplot(df, **_args)
@@ -46,6 +56,8 @@ with PdfPages(pdf_file) as pdf:
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
+    plot(x="params", y="speed", overview=True)
+    plot(x="params", y="speed", errorbar=("pi", 100), err_style="band", overview=True)
     plot(x="params", y="speed")
     plot(x="params", y="speed", errorbar=("pi", 100), err_style="band")
     # plot(x="width", y="speed", base=2)

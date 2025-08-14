@@ -23,7 +23,18 @@ prefix(){
   do
     for neighborhood in 0 2 4 6
     do
-      echo $reward/cpg-$neighborhood $seeds --reward $reward --neighborhood $neighborhood $@
+      echo $reward/cpg-$neighborhood $seeds --reward $reward --arch cpg --neighborhood $neighborhood $@
+    done
+  done
+  for reward in distance kernels
+  do
+    echo $reward/mlp-0-0 $seeds --reward $reward --arch mlp --depth 0 --width 0 $@
+    for depth in 1 2
+    do
+      for width in 1 2 4 8 16 32 64 128
+      do
+        echo $reward/mlp-$depth-$width $seeds --reward $reward --arch mlp --depth $depth --width $width $@
+      done
     done
   done
 ) | while read cmd

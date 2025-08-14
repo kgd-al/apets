@@ -6,6 +6,7 @@ import math
 import numbers
 import pprint
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import auto, Enum
 from pathlib import Path
@@ -147,6 +148,19 @@ class MoveFitness(SubTaskFitnessData):
         DISTANCE = auto()
         KERNELS = auto()
 
+    class KernelAtomicRewards(Enum):
+        Vx = auto()
+        Vy = auto()
+        Vz = auto()
+        z = auto()
+
+    kernal_atomic_reward_weights = {
+        KernelAtomicRewards.Vx.name: .5,
+        KernelAtomicRewards.Vy.name: .25,
+        KernelAtomicRewards.Vz.name: .125,
+        KernelAtomicRewards.z.name: .125,
+    }
+
     def __init__(self, reward: RewardType, forward=True,
                  rerun=False, render=False,
                  log_trajectory: bool = False, log_reward: bool = False,
@@ -197,7 +211,7 @@ class MoveFitness(SubTaskFitnessData):
         if self._log_rewards:
             self._data_rewards = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=["Vx", "Vy", "Vz", "z"]
+                columns=[e.name for e in self.KernelAtomicRewards]
             )
 
         if self._log_trajectory or self._log_rewards:
@@ -218,48 +232,41 @@ class MoveFitness(SubTaskFitnessData):
 
         self.curr_angle = self._robot_xy_angle(data)
         self.curr_delta_angle = self.curr_angle - self.original_angle
-        # print("[kgd-debug] After step:", pos)
-        # print("[kgd-debug] > Delta", delta_pos)
 
         self._invalid = False
-        # self._invalid |= abs(self.curr_delta_angle) > math.pi / 2
-        # self._invalid |= (data.time > 5 and pos.z <= self.original_height)
-
         self._reward = 0
 
-        # # self._reward += self.state * data.time * self.curr_delta.x
-        # # self._reward -= .25 * abs(self.curr_delta.y)
-        # # self._reward -= .25 * abs(self.curr_delta_angle)
-        # self._reward += self.state * self.curr_delta.x
-        # # print(f"{self.state * self.curr_delta.x * self.dt} = "
-        # #       f"{self.state} * {self.curr_delta.x:.10f} * {self.dt}")
-        # # self._reward += .5 * (pos.z > self.original_height)
-        # # if not self._invalid:
-        # #     self._reward += .1  # healthy
-        # self._reward *= self.dt
+        if self.reward_type is self.RewardType.KERNELS or self._log_rewards:
+            KAR = self.KernelAtomicRewards
+            k_rewards = {
+                KAR.Vx: krb(self.velocity.x, .5, -25),
+                KAR.Vy: krb(abs(self.velocity.y), 0, -5),
+                KAR.Vz: krb(self.velocity.z, 0, -5),
+                KAR.z: krb(pos.z - self.original_height, .05, -2e3)
+            }
+            k_reward = sum(
+                self.kernal_atomic_reward_weights[c.name] * v
+                for c, v in k_rewards.items()
+            )
 
         match self.reward_type:
             case self.RewardType.DISTANCE:
                 self._reward += self.state * self.curr_delta.x
             case self.RewardType.KERNELS:
-                self._reward += krb(self.velocity.x, .5, -25) / 2
-                self._reward += krb(abs(self.velocity.y), 0, -5) / 4
-                self._reward += krb(self.velocity.z, 0, -5) / 8
+                self._reward += k_reward
 
-                self._reward += krb(pos.z - self.original_height, .05, -2e3) / 8
+        self._infos["time"] = data.time
 
         if self._log_rewards:
-            self._data_rewards.loc[data.time] = [
-                krb(self.velocity.x, .5, -25) / 2,
-                krb(abs(self.velocity.y), 0, -5) / 4,
-                krb(self.velocity.z, 0, -5) / 8,
-                krb(pos.z - self.original_height, .05, -2e3) / 8
-            ]
+            self._data_rewards.loc[data.time] = {
+                c.name: self.kernal_atomic_reward_weights[c.name] * v
+                for c, v in k_rewards.items()
+            }
+            for c, v in k_rewards.items():
+                self._infos[c.name] += dt * v
+            self._infos["kernels"] += dt * k_reward
 
         self._fitness += self._reward
-
-        if self._render and False:
-            print(f"reward(t={data.time}) = {self._reward}, total = {self._fitness}")
 
         if self._log_trajectory:
             self._data_trajectory.loc[data.time] = [pos.x, pos.y, self._reward, self._fitness]
@@ -271,10 +278,17 @@ class MoveFitness(SubTaskFitnessData):
 
     @staticmethod
     def initial_infos():
-        return dict(dX=0, dY=0, cX=0, cY=0, speed=0)
+        return defaultdict(int)
 
     @property
-    def infos(self): return self._infos
+    def infos(self):
+        normalized_dict = self._infos.copy()
+        t = normalized_dict.get("time", None)
+        assert t is not None
+        if t > 0:
+            for k in [c.name for c in self.KernelAtomicRewards] + ["kernels"]:
+                normalized_dict[k] /= t
+        return normalized_dict
 
     @property
     def previous_infos(self): return self._prev_infos
@@ -381,9 +395,12 @@ class MoveFitness(SubTaskFitnessData):
             ax2.plot(self._data_rewards.index, self._data_rewards.sum(axis=1),
                      linestyle="dashed", color='gray', label="sum")
         )
+        ax2.set_ylim(0, 1)
         for c in self._data_rewards.columns:
             lines.extend(
-                ax.plot(self._data_rewards.index, self._data_rewards[c], label=c))
+                ax.plot(self._data_rewards.index,
+                        self._data_rewards[c],
+                        label=c))
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Atomic reward")
         ax.legend(handles=lines)
