@@ -1,11 +1,5 @@
 #!/bin/bash
 
-#SBATCH --job-name=rerun-all-all
-#SBATCH --partition=batch
-#SBATCH --nodes=1
-###SBATCH --exclusive
-#SBATCH --time=1:00:00
-
 usage(){
     echo "Usage: $0 FOLDER [FOLDERS...]"
     echo "       Searches folder(s) structure for runs to re-evaluate"
@@ -42,10 +36,52 @@ do
       --rotated --reward $reward $depth $width --seed $seed --headless -T $duration
   else
     echo src/apets/hack/cma_es/evolve.py -o $folder --arch $nn --reward $reward \
-      --rerun $depth $width --rotated --headless -T $duration --budget 10000 --seed $seed
+      --rerun $depth $width $neighborhood --rotated --headless -T $duration --budget 10000 --seed $seed
   fi
-#done | xargs -t -L1 -P 0 python
-done | while read cmd
+done > .tasks
+
+ntasks=$(wc -l .tasks | cut -d ' ' -f1)
+echo "$ntasks tasks"
+
+#
+#sbatch --exclusive --nodes=1 --job-name=rerun-all-all --time=1:00:00 <<EOF
+##!/bin/bash
+#
+##SBATCH --ntasks $ntasks
+#
+#W=\$SLURM_JOB_CPUS_PER_NODE
+#W=4
+#
+#cat .tasks | while read cmd
+#do
+#  echo "\$(jobs -p | wc -l)" "\$W"
+#  while [ "\$(jobs -p | wc -l)" -ge "\$W" ]
+#  do
+#    echo "\$(jobs -p | wc -l)" "\$W"
+#    sleep 1
+#  done
+#  echo \$cmd
+#  srun --ntasks=1 --cpus-per-task=1 --exact python \$cmd &
+#done
+#
+#wait
+#rm .tasks
+#
+#EOF
+
+sbatch --nodes=1 --ntasks 1 --cpus-per-task 1 --job-name=rerun-all-all --time=10:00:00 <<EOF
+#!/bin/bash
+
+i=0
+cat .tasks | while read cmd
 do
-  python $cmd
+#  printf "\n\033[32m[%6.2f%%]\033[0m " \$(( 100 * \$i / $ntasks ))
+  awk "BEGIN{printf '\n\033[32m[%6.2f%%]\033[0m ', 100 * \$i / $ntasks"
+  i=\$((\$i+1))
+  echo \$cmd
+  python \$cmd
 done
+
+rm .tasks
+
+EOF
