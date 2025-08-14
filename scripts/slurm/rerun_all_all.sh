@@ -3,7 +3,7 @@
 #SBATCH --job-name=rerun-all-all
 #SBATCH --partition=batch
 #SBATCH --nodes=1
-#SBATCH --exclusive
+###SBATCH --exclusive
 #SBATCH --time=1:00:00
 
 usage(){
@@ -44,4 +44,8 @@ do
     echo src/apets/hack/cma_es/evolve.py -o $folder --arch $nn --reward $reward \
       --rerun $depth $width --rotated --headless -T $duration --budget 10000 --seed $seed
   fi
-done | xargs -t -L1 -P 0 python
+#done | xargs -t -L1 -P 0 python
+done | while read cmd
+do
+  python $cmd
+done
