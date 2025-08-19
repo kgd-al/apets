@@ -244,6 +244,9 @@ class MoveFitness(SubTaskFitnessData):
         self.prev_pos = self.robot_pos(data)
         self.prev_time = data.time
 
+        print([data.body(i) for i in range(model.nbody)])
+        exit(0)
+
         if self._introspective:
             self._motor_data.loc[data.time] = [np.nan for _ in range(2*self._hinges)]
             self._motor_data.iloc[len(self._motor_data)-1, :self._hinges] = [
