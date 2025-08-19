@@ -196,8 +196,8 @@ class MoveFitness(SubTaskFitnessData):
         self._log_rewards, self._data_rewards = log_reward, None
 
         self._introspective = introspective
-        self._motor_data = None
-        self._hinges = -1
+        self._motor_data, self._bodies_data = None, None
+        self._hinges, self._bodies = -1, None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
@@ -231,6 +231,11 @@ class MoveFitness(SubTaskFitnessData):
                     a.name + "-ctrl" for a in self.position_actuators(data)
                 ]
             )
+            self._bodies = [b for i in range(model.nbody) if (b := model.body(i)).name.startswith("mbs1/mbs1")]
+            self._bodies_data = pd.DataFrame(
+                index=pd.Index([], name="t"),
+                columns=[b.name for b in self._bodies],
+            )
 
         if self._log_trajectory or self._log_rewards or self._introspective:
             self.before_step(model, data)
@@ -244,13 +249,13 @@ class MoveFitness(SubTaskFitnessData):
         self.prev_pos = self.robot_pos(data)
         self.prev_time = data.time
 
-        print([data.body(i) for i in range(model.nbody)])
-        exit(0)
-
         if self._introspective:
             self._motor_data.loc[data.time] = [np.nan for _ in range(2*self._hinges)]
             self._motor_data.iloc[len(self._motor_data)-1, :self._hinges] = [
                 a.length[0] for a in self.position_actuators(data)
+            ]
+            self._bodies_data.loc[data.time] = [
+                b.pos[2] for b in self._bodies
             ]
 
     def after_step(self, model: MjModel, data: MjData):
