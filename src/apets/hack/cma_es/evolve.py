@@ -180,6 +180,8 @@ def rerun(args):
         log_trajectory=True, log_reward=True,
         plot_path=folder,
 
+        introspective=args.introspective,
+
         return_ff=True,
     ))
     if args.movie:
@@ -270,6 +272,7 @@ def main() -> None:
                        const='', nargs='?')
     group.add_argument("--movie", default=False, action="store_true", )
     group.add_argument("--headless", default=False, action="store_true", )
+    group.add_argument("--introspective", default=False, action="store_true",)
 
     args = parser.parse_args()
 

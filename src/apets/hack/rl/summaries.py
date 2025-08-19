@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from pandas import Series
 
-parser = argparse.ArgumentParser("Sumarizes summary.csv files")
+parser = argparse.ArgumentParser("Summarizes summary.csv files")
 parser.add_argument("root", type=Path, nargs="+")
 args = parser.parse_args()
 
@@ -21,8 +21,16 @@ df = pd.concat(
 print(df.columns)
 print(df)
 
-print(df.loc[[df.kernels.idxmax(), df.speed.idxmax()]][["arch", "neighborhood", "width", "depth", "kernels", "speed"]])
+print()
+print("Bests")
+arch_groups = df.groupby(["arch", "depth"], dropna=False)
+columns = ["arch", "neighborhood", "width", "depth", "kernels", "speed"]
+champs = df.loc[pd.concat([arch_groups.kernels.idxmax(), arch_groups.speed.idxmax()])][columns]
+champs["SUM"] = champs["speed"] + champs["kernels"]
+champs.sort_values(inplace=True, by="SUM", ascending=False)
+print(champs)
 
+print()
 print("Plotting...")
 
 sns.set_style("darkgrid")
@@ -74,6 +82,18 @@ with PdfPages(pdf_file) as pdf:
     # plot(x="width", y="speed", base=2)
     plot(x="params", y="tps")
     # plot(x="width", y="tps", base=2)
+
+
+def _process(_path):
+    _path = Path(_path.replace("/home/kgd/data", "remote"))
+    _df = pd.read_csv(_path.joinpath("motors.csv"))
+    _df["Path"] = _path
+    return _df
+
+
+df = pd.concat([_process(f) for f in champs.index])
+df.set_index(["Path", "m"], inplace=True)
+print(df)
 
 
 print("Generated", pdf_file)

@@ -58,6 +58,8 @@ def env_kwargs(args, _rerun, _render, _log, _backup):
         rerun=_rerun, render=_render,
         log_trajectory=_log, backup_trajectory=_backup,
         log_reward=_log,
+
+        introspective=args.introspective,
     )
     return dict(
         rerun=_rerun,
@@ -201,6 +203,7 @@ def rerun(args, model_file):
     summary = pd.DataFrame.from_dict({k: [v] for k, v in summary.items()})
     summary.index = [model_file.parent]
 
+    print(summary)
     summary.to_csv(model_file.parent.joinpath("summary.csv"))
 
     # time.sleep(1)  # Ugly but prevents errors when quitting the window
@@ -245,6 +248,7 @@ def main():
                        const='', nargs='?')
     group.add_argument("--movie", default=False, action="store_true",)
     group.add_argument("--headless", default=False, action="store_true",)
+    group.add_argument("--introspective", default=False, action="store_true",)
 
     args = parser.parse_args()
 

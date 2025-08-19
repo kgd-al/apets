@@ -9,7 +9,8 @@ base=$(realpath $(dirname $0)/../..)
 
 duration=15
 
-find $@ -name "summary.csv" | sort | while read f
+#find $@ -name "summary.csv" | sort | while read f
+cat ~/data/champs | while read f
 do
   folder=$(dirname $f)
   trainer=$(cut -d/ -f 5 <<< $f)
@@ -33,10 +34,12 @@ do
   if [ $trainer == "rlearn" ]
   then
     echo src/apets/hack/rl/train.py --rerun $folder/model.zip \
-      --rotated --reward $reward $depth $width --seed $seed --headless -T $duration
+      --rotated --reward $reward $depth $width --seed $seed --headless -T $duration \
+      --introspective
   else
     echo src/apets/hack/cma_es/evolve.py -o $folder --arch $nn --reward $reward \
-      --rerun $depth $width $neighborhood --rotated --headless -T $duration --budget 10000 --seed $seed
+      --rerun $depth $width $neighborhood --rotated --headless -T $duration --seed $seed \
+      --introspective
   fi
 done > .tasks
 
@@ -76,11 +79,13 @@ i=0
 cat .tasks | while read cmd
 do
 #  printf "\n\033[32m[%6.2f%%]\033[0m " \$(( 100 * \$i / $ntasks ))
-  awk "BEGIN{printf '\n\033[32m[%6.2f%%]\033[0m ', 100 * \$i / $ntasks"
+  awk -vi=\$i -vn=$ntasks 'BEGIN{printf "\n\033[32m[%6.2f%%]\033[0m ", 100 * i / n}'
   i=\$((\$i+1))
   echo \$cmd
   python \$cmd
 done
+
+printf "\n\033[32m[100.00%%] Done\033[0m\n"
 
 rm .tasks
 

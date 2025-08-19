@@ -87,8 +87,10 @@ class Environment:
             reward=reward,
             rerun=kwargs.pop("rerun", False),
             render=render,
-            log_trajectory=kwargs.pop("log_trajectory", False), backup_trajectory=False,
+            log_trajectory=kwargs.pop("log_trajectory", False),
+            backup_trajectory=False,
             log_reward=kwargs.pop("log_reward", False),
+            introspective=kwargs.pop("introspective", False),
         )
 
         return_ff = kwargs.pop("return_ff", False)

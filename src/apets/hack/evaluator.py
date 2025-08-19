@@ -15,7 +15,9 @@ from typing import Optional, Annotated, ClassVar, Dict, Any
 import glfw
 import matplotlib
 import mujoco
+import numpy as np
 import pandas as pd
+import scipy
 import yaml
 from colorama import Style, Fore
 from matplotlib import pyplot as plt
@@ -164,7 +166,8 @@ class MoveFitness(SubTaskFitnessData):
     def __init__(self, reward: RewardType, forward=True,
                  rerun=False, render=False,
                  log_trajectory: bool = False, log_reward: bool = False,
-                 backup_trajectory: bool = False):
+                 backup_trajectory: bool = False,
+                 introspective: bool = False):
         super().__init__(state=1 if forward else -1,
                          rerun=rerun, render=render)
 
@@ -192,6 +195,10 @@ class MoveFitness(SubTaskFitnessData):
 
         self._log_rewards, self._data_rewards = log_reward, None
 
+        self._introspective = introspective
+        self._motor_data = None
+        self._hinges = -1
+
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
         self.original_angle = self._robot_xy_angle(data)
@@ -214,13 +221,34 @@ class MoveFitness(SubTaskFitnessData):
                 columns=[e.name for e in self.KernelAtomicRewards]
             )
 
-        if self._log_trajectory or self._log_rewards:
+        if self._introspective:
+            self._hinges = len(data.ctrl) // 2
+            self._motor_data = pd.DataFrame(
+                index=pd.Index([], name="t"),
+                columns=[
+                    a.name + "-pos" for a in self.position_actuators(data)
+                ] + [
+                    a.name + "-ctrl" for a in self.position_actuators(data)
+                ]
+            )
+
+        if self._log_trajectory or self._log_rewards or self._introspective:
             self.before_step(model, data)
             self.after_step(model, data)
+
+    @staticmethod
+    def position_actuators(data):
+        return [data.actuator(i) for i in range(0, len(data.ctrl), 2)]
 
     def before_step(self, model: MjModel, data: MjData):
         self.prev_pos = self.robot_pos(data)
         self.prev_time = data.time
+
+        if self._introspective:
+            self._motor_data.loc[data.time] = [np.nan for _ in range(2*self._hinges)]
+            self._motor_data.iloc[len(self._motor_data)-1, :self._hinges] = [
+                a.length[0] for a in self.position_actuators(data)
+            ]
 
     def after_step(self, model: MjModel, data: MjData):
         dt = data.time - self.prev_time
@@ -276,6 +304,11 @@ class MoveFitness(SubTaskFitnessData):
             self._infos["cY"] += self.curr_delta.y
             self._infos["speed"] = pos.x / data.time if data.time > 0 else 0
 
+        if self._introspective:
+            self._motor_data.iloc[len(self._motor_data)-1, self._hinges:] = [
+                a.ctrl[0] for a in self.position_actuators(data)
+            ]
+
     @staticmethod
     def initial_infos():
         return defaultdict(int)
@@ -297,7 +330,9 @@ class MoveFitness(SubTaskFitnessData):
     def invalid(self): return self._invalid
 
     def render(self, model: MjModel, data: MjData, viewer):
-        assert isinstance(viewer, CustomMujocoViewer)
+        if not isinstance(viewer, CustomMujocoViewer):
+            return
+
         # # scene.ngeom = 0
         # n = scene.ngeom
         # i = n
@@ -366,6 +401,10 @@ class MoveFitness(SubTaskFitnessData):
             pdf.savefig(self.plot_trajectory("r"))
             pdf.savefig(self.plot_trajectory("R"))
             pdf.savefig(self.plot_rewards())
+            if self._introspective:
+                fig, stats = self.plot_joints()
+                pdf.savefig(fig)
+                stats.to_csv(path.joinpath("motors.csv"))
         plt.close("all")
 
     def plot_trajectory(self, column="R"):
@@ -405,6 +444,54 @@ class MoveFitness(SubTaskFitnessData):
         ax.set_ylabel("Atomic reward")
         ax.legend(handles=lines)
         return fig
+
+    def plot_joints(self):
+        w, h = matplotlib.rcParams["figure.figsize"]
+        fig, axes = plt.subplots(self._hinges, 2,
+                                 sharex=True, sharey=True,
+                                 figsize=(3*w, 2*h))
+        sin_fin_stats = []
+        x = self._motor_data.index
+        for ax, c in zip(axes.T.flat, self._motor_data.columns):
+            y = self._motor_data[c]
+            ax.plot(x, y, label=c)
+            title = c
+            try:
+                fit = fit_sin(x, y)
+                ax.plot(x, fit.pop("fn")(x))
+                fit["m"] = c
+                sin_fin_stats.append(fit)
+                title += ";" + fit["fn_str"]
+            except RuntimeError:
+                pass
+            ax.set_title(title)
+        for ax in axes[-1, :]:
+            ax.set_xlabel("Time (s)")
+        fig.tight_layout()
+        return fig, pd.DataFrame(sin_fin_stats).set_index("m")
+
+
+def fit_sin(x, y):
+    dft_sample_freq = np.fft.fftfreq(len(x), d=x[1] - x[0])
+    dft = abs(np.fft.fft(y))
+
+    # Guesses
+    f0 = abs(dft_sample_freq[np.argmax(dft[1:])+1])     # Frequency
+    a0 = np.std(y) * 2.**.5                             # Amplitude
+    p0 = 0                                              # Phase
+    c0 = np.mean(y)                                     # Offset
+    initial_guess = np.array([a0, 2*np.pi*f0, p0, c0])
+
+    def sin(t, _a, _w, _p, _c): return _a * np.sin(_w*t + _p) + _c
+    popt, pcov = scipy.optimize.curve_fit(
+        sin, x, y, p0=initial_guess, nan_policy="omit",
+    )
+    a, w, p, c = popt
+    f = w / (2*np.pi)
+    return dict(
+        A=a, f=f, p=p, c=c, fn=lambda t: sin(t, _a=a, _w=w, _p=p, _c=c),
+        fn_str=f"{a:.2} sin({w:.3}t + {p:.2}) {c:+.2}"
+    )
 
 
 class MoveForwardFitness(MoveFitness):
