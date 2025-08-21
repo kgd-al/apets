@@ -196,8 +196,8 @@ class MoveFitness(SubTaskFitnessData):
         self._log_rewards, self._data_rewards = log_reward, None
 
         self._introspective = introspective
-        self._motor_data, self._bodies_data = None, None
-        self._hinges, self._bodies = -1, None
+        self._motor_data, self._bricks_data = None, None
+        self._hinges, self._bricks = -1, None
 
     def reset(self, model: MjModel, data: MjData):
         super().reset(model, data)
@@ -231,10 +231,13 @@ class MoveFitness(SubTaskFitnessData):
                     a.name + "-ctrl" for a in self.position_actuators(data)
                 ]
             )
-            self._bodies = [b for i in range(model.nbody) if (b := model.body(i)).name.startswith("mbs1/mbs1")]
-            self._bodies_data = pd.DataFrame(
+            self._bricks = [g.name for i in range(model.ngeom)
+                            if (g := model.geom(i)).name.startswith("mbs1/mbs1")
+                            and np.isclose(g.size[0], g.size[1])
+                            and np.isclose(g.size[0], g.size[2])]
+            self._bricks_data = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=[b.name for b in self._bodies],
+                columns=self._bricks,
             )
 
         if self._log_trajectory or self._log_rewards or self._introspective:
@@ -245,6 +248,9 @@ class MoveFitness(SubTaskFitnessData):
     def position_actuators(data):
         return [data.actuator(i) for i in range(0, len(data.ctrl), 2)]
 
+    def limb_bricks(self, data):
+        return [data.geom(g) for g in self._bricks]
+
     def before_step(self, model: MjModel, data: MjData):
         self.prev_pos = self.robot_pos(data)
         self.prev_time = data.time
@@ -253,9 +259,6 @@ class MoveFitness(SubTaskFitnessData):
             self._motor_data.loc[data.time] = [np.nan for _ in range(2*self._hinges)]
             self._motor_data.iloc[len(self._motor_data)-1, :self._hinges] = [
                 a.length[0] for a in self.position_actuators(data)
-            ]
-            self._bodies_data.loc[data.time] = [
-                b.pos[2] for b in self._bodies
             ]
 
     def after_step(self, model: MjModel, data: MjData):
@@ -315,6 +318,9 @@ class MoveFitness(SubTaskFitnessData):
         if self._introspective:
             self._motor_data.iloc[len(self._motor_data)-1, self._hinges:] = [
                 a.ctrl[0] for a in self.position_actuators(data)
+            ]
+            self._bricks_data.loc[data.time] = [
+                b.xpos[2] for b in self.limb_bricks(data)
             ]
 
     @staticmethod
@@ -413,6 +419,9 @@ class MoveFitness(SubTaskFitnessData):
                 fig, stats = self.plot_joints()
                 pdf.savefig(fig)
                 stats.to_csv(path.joinpath("motors.csv"))
+                fig, stats = self.plot_bodies()
+                pdf.savefig(fig)
+                stats.to_csv(path.joinpath("steps.csv"))
         plt.close("all")
 
     def plot_trajectory(self, column="R"):
@@ -458,7 +467,7 @@ class MoveFitness(SubTaskFitnessData):
         fig, axes = plt.subplots(self._hinges, 2,
                                  sharex=True, sharey=True,
                                  figsize=(3*w, 2*h))
-        sin_fin_stats = []
+        sin_fit_stats = []
         x = self._motor_data.index
         for ax, c in zip(axes.T.flat, self._motor_data.columns):
             y = self._motor_data[c]
@@ -468,7 +477,7 @@ class MoveFitness(SubTaskFitnessData):
                 fit = fit_sin(x, y)
                 ax.plot(x, fit.pop("fn")(x))
                 fit["m"] = c
-                sin_fin_stats.append(fit)
+                sin_fit_stats.append(fit)
                 title += ";" + fit["fn_str"]
             except RuntimeError:
                 pass
@@ -476,7 +485,36 @@ class MoveFitness(SubTaskFitnessData):
         for ax in axes[-1, :]:
             ax.set_xlabel("Time (s)")
         fig.tight_layout()
-        return fig, pd.DataFrame(sin_fin_stats).set_index("m")
+        return fig, pd.DataFrame(sin_fit_stats).set_index("m")
+
+    def plot_bodies(self):
+        bricks = [
+            (f"mbs1/mbs1_link{i}_link1_geom2", c)
+            for i, c in [(2, "FL"), (0, "FR"), (1, "HL"), (3, "HR")]
+        ]
+
+        fig, axes = plt.subplots(len(bricks) // 2, 2,
+                                 sharex=True, sharey=True)
+
+        sin_fit_stats = []
+        x = self._bricks_data.index
+        for ax, (c, lbl) in zip(axes.flat, bricks):
+            y = self._bricks_data[c]
+            ax.plot(x, y, label=lbl)
+            title = lbl
+            try:
+                fit = fit_sin(x, y)
+                ax.plot(x, fit.pop("fn")(x), lw=.5, ls='--')
+                fit["b"] = c
+                sin_fit_stats.append(fit)
+                title += ": " + fit["fn_str"]
+            except RuntimeError:
+                pass
+            ax.set_title(title)
+        for ax in axes[-1, :]:
+            ax.set_xlabel("Time (s)")
+        fig.tight_layout()
+        return fig, pd.DataFrame(sin_fit_stats).set_index("b")
 
 
 def fit_sin(x, y):
