@@ -195,6 +195,8 @@ class MoveFitness(SubTaskFitnessData):
 
         self._log_rewards, self._data_rewards = log_reward, None
 
+        self._std_data = None
+
         self._introspective = introspective
         self._motor_data, self._bricks_data = None, None
         self._hinges, self._bricks = -1, None
@@ -238,6 +240,11 @@ class MoveFitness(SubTaskFitnessData):
             self._bricks_data = pd.DataFrame(
                 index=pd.Index([], name="t"),
                 columns=self._bricks,
+            )
+
+            self._std_data = pd.DataFrame(
+                index=pd.Index([], name="t"),
+                columns=["y", "z", "Vx", "Vy", "Vz", "roll", "pitch", "yaw"]
             )
 
         if self._log_trajectory or self._log_rewards or self._introspective:
@@ -323,6 +330,16 @@ class MoveFitness(SubTaskFitnessData):
                 b.xpos[2] for b in self.limb_bricks(data)
             ]
 
+            q = self.robot_ort(data)
+            roll = math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x**2 + q.y**2))
+            pitch = 2 * math.atan2(math.sqrt(1 + 2 * (q.w * q.y - q.x * q.z)),
+                                   math.sqrt(1 - 2 * (q.w * q.y - q.x * q.z))) - math.pi / 2
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y**2 + q.z**2)) - math.pi / 2
+
+            self._std_data.loc[data.time] = [
+                pos.y, pos.z, *self.velocity, roll, pitch, yaw
+            ]
+
     @staticmethod
     def initial_infos():
         return defaultdict(int)
@@ -335,6 +352,12 @@ class MoveFitness(SubTaskFitnessData):
         if t > 0:
             for k in [c.name for c in self.KernelAtomicRewards] + ["kernels"]:
                 normalized_dict[k] /= t
+
+        if self._std_data is not None:
+            for c in self._std_data.columns:
+                normalized_dict["avg_" + c] = self._std_data[c].mean()
+                normalized_dict["std_" + c] = self._std_data[c].std()
+
         return normalized_dict
 
     @property

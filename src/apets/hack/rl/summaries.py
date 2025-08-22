@@ -153,7 +153,7 @@ with PdfPages(pdf_file) as pdf:
         _df["Valid"] = _df.f.map(lambda x: .1 <= x <= 10)
         return _df
 
-    for df_name, base_df in [("all champions", champs), ("the pareto front", pareto)]:
+    for df_name, base_df in [("all champions", champs)]:#, ("the pareto front", pareto)]:
         df = pd.concat([_process(f) for f in base_df.index])
         df.set_index(["Path", "m"], inplace=True)
         print(df)
