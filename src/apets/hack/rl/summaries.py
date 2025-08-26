@@ -233,5 +233,5 @@ with PdfPages(pdf_file) as pdf:
             pdf.savefig(ax.figure, bbox_inches="tight")
             plt.close()
 
-            
+
 print("Generated", pdf_file)
