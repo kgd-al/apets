@@ -213,23 +213,25 @@ with PdfPages(pdf_file) as pdf:
             )
             print(" ", g, U, p)
 
-    # def _process(_path):
-    #     _path = Path(_path)
-    #     _df = pd.read_csv(_path.joinpath("motors.csv"))
-    #     _df["Path"] = _path
-    #     _df["Valid"] = _df.f.map(lambda x: .1 <= x <= 10)
-    #     return _df
-    #
-    # for df_name, base_df in [("all champions", champs), ("the pareto front", pareto)]:
-    #     df = pd.concat([_process(f) for f in base_df.index])
-    #     df.set_index(["Path", "m"], inplace=True)
-    #     print(df)
-    #
-    #     for label, value in [("Amplitude", "A"), ("Frequency", "f"), ("Phase", "p"), ("Offset", "c")]:
-    #         ax = sns.stripplot(df[df.Valid], x=value, y="m", hue="Path")
-    #         sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-    #         ax.set_title(f"{label} distributions per joint for {df_name}")
-    #         pdf.savefig(ax.figure, bbox_inches="tight")
-    #         plt.close()
 
+    def _process(_path):
+        _path = Path(_path)
+        _df = pd.read_csv(_path.joinpath("motors.csv"))
+        _df["Path"] = _path
+        _df["Valid"] = _df.f.map(lambda x: .1 <= x <= 10)
+        return _df
+
+    for df_name, base_df in [("all champions", champs)]:#, ("the pareto front", pareto)]:
+        df = pd.concat([_process(f) for f in base_df.index])
+        df.set_index(["Path", "m"], inplace=True)
+        print(df)
+
+        for label, value in [("Amplitude", "A"), ("Frequency", "f"), ("Phase", "p"), ("Offset", "c")]:
+            ax = sns.stripplot(df[df.Valid], x=value, y="m", hue="Path")
+            sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
+            ax.set_title(f"{label} distributions per joint for {df_name}")
+            pdf.savefig(ax.figure, bbox_inches="tight")
+            plt.close()
+
+            
 print("Generated", pdf_file)

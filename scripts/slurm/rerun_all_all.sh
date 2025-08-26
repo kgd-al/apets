@@ -9,9 +9,9 @@ base=$(realpath $(dirname $0)/../..)
 
 duration=15
 
-#find $@ -name "summary.csv" | sort | while read f
+find $@ -name "summary.csv" | sort | while read f
 #cat ~/data/pareto | while read f
-cat ~/data/champs | while read f
+#cat ~/data/champs | while read f
 do
   folder=$(dirname $f)
   trainer=$(cut -d/ -f 5 <<< $f)
