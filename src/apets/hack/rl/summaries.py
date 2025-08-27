@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import math
 import shutil
 from pathlib import Path
@@ -35,6 +36,8 @@ print("Dropping invalid runs:", " ".join(invalid_runs))
 
 df = df[~df.index.map(lambda _s: any(__s in _s for __s in invalid_runs))]
 print(df)
+
+df["|avg_y|"] = df["avg_y"].abs()
 
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
@@ -103,11 +106,33 @@ if not pareto_folder.exists():
     print()
 
 
+print("...")
+
+
+def _hue(_overview=True):
+    def fmt_rl(_s):
+        trainer = _s.split("/")[-4]
+        if trainer == "rlearn":
+            trainer = "ppo"
+        return trainer
+
+    return Series(name="arch" + ("" if _overview else "-detailed"),
+                  data=(
+                          df.arch
+                          + ("" if _overview else df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else ""))
+                          + "-" + df.index.map(fmt_rl)
+                  ))
+
+
+hues = {_overview: _hue(_overview=_overview) for _overview in [True, False]}
+df["groups"] = groups = hues[True]
+df["detailed-groups"] = detailed_groups = hues[False]
+
 print("Plotting...")
 
 sns.set_style("darkgrid")
 pdf_file = args.root.joinpath("summary.pdf")
-with PdfPages(pdf_file) as pdf:
+with (PdfPages(pdf_file) as pdf):
     # g = sns.scatterplot(df, x="params", y="depth")
     # plt.xscale('log', base=10)
     # pdf.savefig(g.figure, bbox_inches="tight")
@@ -117,22 +142,6 @@ with PdfPages(pdf_file) as pdf:
     # plt.xscale('log', base=2)
     # pdf.savefig(g.figure, bbox_inches="tight")
     # plt.close()
-
-    def _hue(_overview=True):
-        def fmt_rl(_s):
-            trainer = _s.split("/")[-4]
-            if trainer == "rlearn":
-                trainer = "ppo"
-            return trainer
-        return Series(name="arch" + ("" if _overview else "-detailed"),
-                      data=(
-            df.arch
-            + ("" if _overview else df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else ""))
-            + "-" + df.index.map(fmt_rl)
-        ))
-    hues = {_overview: _hue(_overview=_overview) for _overview in [True, False]}
-    overview_hues = hues[True]
-    detailed_hues = hues[False]
 
     def plot(x, y, base=10, **kwargs):
         _args = dict(x=x, y=y,
@@ -148,70 +157,79 @@ with PdfPages(pdf_file) as pdf:
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
-    # for overview in [True, False]:
-    #     g = sns.scatterplot(df, x="speed", y="kernels", hue=hues[overview], style="reward")
-    #     g.axes.plot(pareto.speed, pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
-    #                 label="Pareto front")
-    #     g.axes.legend()
-    #
-    #     pdf.savefig(g.figure, bbox_inches="tight")
-    #     plt.close()
-    #
-    #     for k in ["speed", "kernels"]:
-    #         plot(x="params", y=k, overview=overview)
-    #         plot(x="params", y=k, errorbar=("pi", 100), err_style="band", overview=overview)
-
-    plot(x="params", y="tps")
-    for c in ["Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
-        # plot(x="params", y=c)
-        #
-        # ===
-        args = dict(
-            data=df, x=hues[True], y=c, hue="reward",
-            split=True, gap=.1, inner="quart", cut=0,
-            common_norm=True, density_norm="area"
-        )
-        g = sns.violinplot(**args)
-
-        pairs = [(("mlp-cma", "kernels"), ("mlp-cma", "distance"))]
-        annotator = Annotator(g, pairs, data=df, x=hues[True], y=c, hue="reward")
-        annotator.configure(test="Mann-Whitney", verbose=2)
-        annotator.apply_and_annotate()
+    for overview in [True, False]:
+        g = sns.scatterplot(df, x="speed", y="kernels", hue=hues[overview], style="reward")
+        g.axes.plot(pareto.speed, pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
+                    label="Pareto front")
+        g.axes.legend()
 
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
-        # # ===
-        # fig, ax = plt.subplots()
-        # args["inner"] = None
-        # handles, labels = [], []
-        # for (hue, group), color in zip(
-        #         detailed_hues.groupby(detailed_hues, sort=False),
-        #         sns.color_palette(None, detailed_hues.unique().size)):
-        #     args["data"] = df.loc[group.index]
-        #     args["x"] = overview_hues[group.index]
-        #     args["palette"] = (color, .5 + .5 * np.array(color))
-        #     sns.violinplot(**args, alpha=.25, legend=False)
-        #     handles.append(plt.Rectangle((0, 0), 0, 0,
-        #                                  fc=color))
-        #     labels.append(hue)
-        #
-        # fig.legend(
-        #     labels=labels, handles=handles,
-        #     title="arch-detailed",
-        # )
-        #
-        # pdf.savefig(fig, bbox_inches="tight")
-        # plt.close()
-        # # ===
+        for k in ["speed", "kernels"]:
+            plot(x="params", y=k, overview=overview)
+            plot(x="params", y=k, errorbar=("pi", 100), err_style="band", overview=overview)
+    print()
 
+    tested_pairs = [
+        ((a, b), (c, d)) for ((a, b), (c, d)) in
+        itertools.combinations(itertools.product(df["groups"].unique(), df["reward"].unique()), r=2)
+        if a == c or b == d
+    ]
+    print("Testing", len(tested_pairs), "pairs:", tested_pairs)
+    annotator = None
+
+    plot(x="params", y="tps")
+    for c in ["Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
         print(c)
-        for g in ["mlp-cma", "cpg-cma", "mlp-ppo"]:
-            U, p = scipy.stats.mannwhitneyu(
-                x=df[(overview_hues == g) & (df.reward == "kernels")][c],
-                y=df[(overview_hues == g) & (df.reward == "distance")][c]
-            )
-            print(" ", g, U, p)
+        plot(x="params", y=c)
+
+        # ===
+        violinplot_args = dict(
+            data=df, x="groups", y=c, hue="reward",
+            split=True, gap=.1, inner="quart", cut=0,
+            common_norm=True, density_norm="area"
+        )
+
+        ax = sns.violinplot(**violinplot_args)
+
+        try:
+            annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
+            annotator.configure(test="Mann-Whitney", verbose=2,
+                                hide_non_significant=True, text_format="simple",
+                                comparisons_correction="bonferroni")
+            annotator.apply_and_annotate()
+            print()
+        except:
+            print(r"/!\\/!\\")
+
+        pdf.savefig(ax.figure, bbox_inches="tight")
+        plt.close()
+
+        # ===
+        fig, ax = plt.subplots()
+        sub_violinplots_args = violinplot_args.copy()
+        sub_violinplots_args["inner"] = None
+        handles, labels = [], []
+        for (hue, group), color in zip(
+                detailed_groups.groupby(detailed_groups, sort=False),
+                sns.color_palette(None, detailed_groups.unique().size)):
+            sub_violinplots_args["data"] = df.loc[group.index]
+            sub_violinplots_args["x"] = groups[group.index]
+            sub_violinplots_args["palette"] = (color, .5 + .5 * np.array(color))
+            sns.violinplot(**sub_violinplots_args, alpha=.25, legend=False)
+            handles.append(plt.Rectangle((0, 0), 0, 0,
+                                         fc=color))
+            labels.append(hue)
+
+        fig.legend(
+            labels=labels, handles=handles,
+            title="arch-detailed",
+        )
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close()
+        # ===
 
 
     def _process(_path):

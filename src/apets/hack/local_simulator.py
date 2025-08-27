@@ -203,7 +203,7 @@ class LocalSimulator:
 
 
 LATEST_MUJOCO = 332
-OLD_MUJOCO = mujoco.mj_version() < LATEST_MUJOCO
+OLD_MUJOCO = False#mujoco.mj_version() < LATEST_MUJOCO
 if OLD_MUJOCO:
     print(f"WARNING: Your mujoco version is old {mujoco.mj_version()} < {LATEST_MUJOCO}")
 
