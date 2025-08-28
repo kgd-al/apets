@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scipy.stats
 import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -18,26 +17,43 @@ parser.add_argument("root", type=Path)
 parser.add_argument("--purge", default=False, action="store_true", help="Purge old showcased files")
 args = parser.parse_args()
 
-df = pd.concat(
-    pd.read_csv(f, index_col=0)
-    for f in args.root.glob("**/summary.csv")
-)
+df_file = args.root.joinpath("summaries.csv")
+if args.purge and df_file.exists():
+    df_file.unlink()
 
-str_root = str(args.root)
-df.index = df.index.map(lambda _p: _p.replace("/home/kgd/data", str_root))
-print(df.columns)
+if df_file.exists():
+    df = pd.read_csv(df_file)
+else:
+    df = pd.concat(
+        pd.read_csv(f, index_col=0)
+        for f in args.root.glob("**/summary.csv")
+    )
 
-invalid_runs = [
-    f"cma/{r}/mlp-{w}"
-    for r in ["kernels", "distance"]
-    for w in ["2-128", "2-64", "1-128"]
-]
-print("Dropping invalid runs:", " ".join(invalid_runs))
+    str_root = str(args.root)
+    df.index = df.index.map(lambda _p: _p.replace("/home/kgd/data", str_root))
+    print(df.columns)
 
-df = df[~df.index.map(lambda _s: any(__s in _s for __s in invalid_runs))]
-print(df)
+    invalid_runs = [
+        f"cma/{r}/mlp-{w}"
+        for r in ["kernels", "distance"]
+        for w in ["2-128", "2-64", "1-128"]
+    ]
+    print("Dropping invalid runs:", " ".join(invalid_runs))
 
-df["|avg_y|"] = df["avg_y"].abs()
+    df = df[~df.index.map(lambda _s: any(__s in _s for __s in invalid_runs))]
+    print(df)
+
+    df["|avg_y|"] = df["avg_y"].abs()
+
+    def compute_d_o(_path):
+        _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
+        _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
+        print(_df)
+        return 0
+
+    df["avg_d_o"] = df.index.map(compute_d_o)
+
+exit(42)
 
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
@@ -193,15 +209,12 @@ with (PdfPages(pdf_file) as pdf):
 
         ax = sns.violinplot(**violinplot_args)
 
-        try:
-            annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
-            annotator.configure(test="Mann-Whitney", verbose=2,
-                                hide_non_significant=True, text_format="simple",
-                                comparisons_correction="bonferroni")
-            annotator.apply_and_annotate()
-            print()
-        except:
-            print(r"/!\\/!\\")
+        annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
+        annotator.configure(test="Mann-Whitney", verbose=2,
+                            hide_non_significant=True, text_format="simple",
+                            comparisons_correction="bonferroni")
+        annotator.apply_and_annotate()
+        print()
 
         pdf.savefig(ax.figure, bbox_inches="tight")
         plt.close()

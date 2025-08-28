@@ -215,7 +215,7 @@ class MoveFitness(SubTaskFitnessData):
 
             self._data_trajectory = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=["x", "y", "r", "R"])
+                columns=["x", "y", "z", "r", "R"])
 
         if self._log_rewards:
             self._data_rewards = pd.DataFrame(
@@ -315,7 +315,7 @@ class MoveFitness(SubTaskFitnessData):
         self._fitness += self._reward
 
         if self._log_trajectory:
-            self._data_trajectory.loc[data.time] = [pos.x, pos.y, self._reward, self._fitness]
+            self._data_trajectory.loc[data.time] = [pos.x, pos.y, pos.z, self._reward, self._fitness]
             self._infos["dX"] = pos.x
             self._infos["dY"] = pos.y
             self._infos["cX"] += self.curr_delta.x
@@ -445,6 +445,8 @@ class MoveFitness(SubTaskFitnessData):
                 fig, stats = self.plot_bodies()
                 pdf.savefig(fig)
                 stats.to_csv(path.joinpath("steps.csv"))
+                self._motor_data.to_csv(path.joinpath("joints_data.csv"))
+                self._bricks_data.to_csv(path.joinpath("bricks_data.csv"))
         plt.close("all")
 
     def plot_trajectory(self, column="R"):
