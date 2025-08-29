@@ -22,7 +22,8 @@ if args.purge and df_file.exists():
     df_file.unlink()
 
 if df_file.exists():
-    df = pd.read_csv(df_file)
+    df = pd.read_csv(df_file, index_col=0)
+
 else:
     df = pd.concat(
         pd.read_csv(f, index_col=0)
@@ -41,19 +42,19 @@ else:
     print("Dropping invalid runs:", " ".join(invalid_runs))
 
     df = df[~df.index.map(lambda _s: any(__s in _s for __s in invalid_runs))]
-    print(df)
 
     df["|avg_y|"] = df["avg_y"].abs()
 
     def compute_d_o(_path):
         _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
         _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
-        print(_df)
-        return 0
+        return (_df.iloc[1:].reset_index(drop=True) - _df.iloc[:-1]).abs().mean().mean()
 
     df["avg_d_o"] = df.index.map(compute_d_o)
 
-exit(42)
+    df.to_csv(df_file)
+
+print(df)
 
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
@@ -68,6 +69,19 @@ champs["SUM"] = champs["speed"] + champs["kernels"]
 champs.sort_values(inplace=True, by="SUM", ascending=False)
 print(champs)
 print()
+
+
+for c in champs.index:
+    c = Path(c)
+    b = pd.read_csv(c.joinpath("bricks_data.csv"))
+    fig, ax = plt.subplots()
+    for col in [b for b in b.columns if len(b.split("_")) == 4]:
+        ax.plot(b.t, b[col], label=col)
+    ax.legend()
+    fig.savefig(c.joinpath("steps.pdf"), bbox_inches="tight")
+    fig.savefig(c.joinpath("steps.png"), bbox_inches="tight")
+
+exit(42)
 
 
 def showcase(_p, _out):
@@ -196,7 +210,8 @@ with (PdfPages(pdf_file) as pdf):
     annotator = None
 
     plot(x="params", y="tps")
-    for c in ["Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
+    # for c in ["avg_d_o", "Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
+    for c in [c for c in df.columns if ("avg" in c or "std" in c)]:
         print(c)
         plot(x="params", y=c)
 
@@ -213,7 +228,8 @@ with (PdfPages(pdf_file) as pdf):
         annotator.configure(test="Mann-Whitney", verbose=2,
                             hide_non_significant=True, text_format="simple",
                             comparisons_correction="bonferroni")
-        annotator.apply_and_annotate()
+        _, corrected_results = annotator.apply_and_annotate()
+        print([r.data.pvalue for r in corrected_results])
         print()
 
         pdf.savefig(ax.figure, bbox_inches="tight")
