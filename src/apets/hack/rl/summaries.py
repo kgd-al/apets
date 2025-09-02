@@ -32,7 +32,6 @@ else:
 
     str_root = str(args.root)
     df.index = df.index.map(lambda _p: _p.replace("/home/kgd/data", str_root))
-    print(df.columns)
 
     invalid_runs = [
         f"cma/{r}/mlp-{w}"
@@ -46,42 +45,73 @@ else:
     df["|avg_y|"] = df["avg_y"].abs()
 
     def compute_d_o(_path):
-        _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
-        _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
-        return (_df.iloc[1:].reset_index(drop=True) - _df.iloc[:-1]).abs().mean().mean()
+        try:
+            _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
+            _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
+            return (_df.iloc[1:].reset_index(drop=True) - _df.iloc[:-1]).abs().mean().mean()
+        except FileNotFoundError:
+            return np.nan
 
     df["avg_d_o"] = df.index.map(compute_d_o)
 
+    df.loc[df.reward == "distance", "reward"] = "speed"
+
+    def _make_groups(_overview=True):
+        def fmt_rl(_s):
+            trainer = _s.split("/")[-4]
+            if trainer == "rlearn":
+                trainer = "ppo"
+            return trainer
+
+        return Series(name="arch" + ("" if _overview else "-detailed"),
+                      data=(
+                              df.arch
+                              + ("" if _overview else df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else ""))
+                              + "-" + df.index.map(fmt_rl)
+                      ))
+
+    df["groups"] = _make_groups(_overview=True)
+    df["detailed-groups"] = _make_groups(_overview=False)
+
     df.to_csv(df_file)
 
+
+def groups(_detailed):
+    return df["detailed-groups"] if _detailed else df["groups"]
+
+
+print(df.columns)
 print(df)
 
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
 # print()
 
+rewards = df.reward.unique()
+
 print()
 print("Bests")
-arch_groups = df.groupby(["arch", "depth"], dropna=False)
-columns = ["arch", "neighborhood", "width", "depth", "kernels", "speed"]
-champs = df.loc[pd.concat([arch_groups.kernels.idxmax(), arch_groups.speed.idxmax()])][columns]
+columns = ["reward", "arch", "neighborhood", "width", "depth", "kernels", "speed", "lazy", "detailed-groups"]
+champs = df.loc[pd.concat(
+    df[df.reward == r].groupby("detailed-groups", dropna=False)[r].idxmax()
+    for r in rewards
+)][columns]
 champs["SUM"] = champs["speed"] + champs["kernels"]
 champs.sort_values(inplace=True, by="SUM", ascending=False)
 print(champs)
 print()
 
 
-for c in champs.index:
-    c = Path(c)
-    b = pd.read_csv(c.joinpath("bricks_data.csv"))
-    fig, ax = plt.subplots()
-    for col in [b for b in b.columns if len(b.split("_")) == 4]:
-        ax.plot(b.t, b[col], label=col)
-    ax.legend()
-    fig.savefig(c.joinpath("steps.pdf"), bbox_inches="tight")
-    fig.savefig(c.joinpath("steps.png"), bbox_inches="tight")
-
-exit(42)
+# for c in champs.index:
+#     c = Path(c)
+#     b = pd.read_csv(c.joinpath("bricks_data.csv"))
+#     fig, ax = plt.subplots()
+#     for col in [b for b in b.columns if len(b.split("_")) == 4]:
+#         ax.plot(b.t, b[col], label=col)
+#     ax.legend()
+#     fig.savefig(c.joinpath("steps.pdf"), bbox_inches="tight")
+#     fig.savefig(c.joinpath("steps.png"), bbox_inches="tight")
+#     plt.close()
 
 
 def showcase(_p, _out):
@@ -136,28 +166,6 @@ if not pareto_folder.exists():
     print()
 
 
-print("...")
-
-
-def _hue(_overview=True):
-    def fmt_rl(_s):
-        trainer = _s.split("/")[-4]
-        if trainer == "rlearn":
-            trainer = "ppo"
-        return trainer
-
-    return Series(name="arch" + ("" if _overview else "-detailed"),
-                  data=(
-                          df.arch
-                          + ("" if _overview else df.depth.map(lambda f: str(int(f)) if not np.isnan(f) else ""))
-                          + "-" + df.index.map(fmt_rl)
-                  ))
-
-
-hues = {_overview: _hue(_overview=_overview) for _overview in [True, False]}
-df["groups"] = groups = hues[True]
-df["detailed-groups"] = detailed_groups = hues[False]
-
 print("Plotting...")
 
 sns.set_style("darkgrid")
@@ -175,7 +183,7 @@ with (PdfPages(pdf_file) as pdf):
 
     def plot(x, y, base=10, **kwargs):
         _args = dict(x=x, y=y,
-                     hue=hues[kwargs.pop("overview", True)],
+                     hue=groups(kwargs.pop("detailed", False)),
                      col="reward",
                      kind='line', marker='o',
                      err_style="bars", errorbar="ci", estimator="median")
@@ -187,8 +195,8 @@ with (PdfPages(pdf_file) as pdf):
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
-    for overview in [True, False]:
-        g = sns.scatterplot(df, x="speed", y="kernels", hue=hues[overview], style="reward")
+    for detailed in [False, True]:
+        g = sns.scatterplot(df, x="speed", y="kernels", hue=groups(detailed), style="reward")
         g.axes.plot(pareto.speed, pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
                     label="Pareto front")
         g.axes.legend()
@@ -196,9 +204,9 @@ with (PdfPages(pdf_file) as pdf):
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
-        for k in ["speed", "kernels"]:
-            plot(x="params", y=k, overview=overview)
-            plot(x="params", y=k, errorbar=("pi", 100), err_style="band", overview=overview)
+        for k in rewards:
+            plot(x="params", y=k, detailed=detailed)
+            plot(x="params", y=k, errorbar=("pi", 100), err_style="band", detailed=detailed)
     print()
 
     tested_pairs = [
@@ -218,47 +226,47 @@ with (PdfPages(pdf_file) as pdf):
         # ===
         violinplot_args = dict(
             data=df, x="groups", y=c, hue="reward",
-            split=True, gap=.1, inner="quart", cut=0,
+            inner="quarts", cut=0,
             common_norm=True, density_norm="area"
         )
 
         ax = sns.violinplot(**violinplot_args)
 
-        annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
-        annotator.configure(test="Mann-Whitney", verbose=2,
-                            hide_non_significant=True, text_format="simple",
-                            comparisons_correction="bonferroni")
-        _, corrected_results = annotator.apply_and_annotate()
-        print([r.data.pvalue for r in corrected_results])
-        print()
+        # annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
+        # annotator.configure(test="Mann-Whitney", verbose=2,
+        #                     hide_non_significant=True, text_format="simple",
+        #                     comparisons_correction="bonferroni")
+        # _, corrected_results = annotator.apply_and_annotate()
+        # print([r.data.pvalue for r in corrected_results])
+        # print()
 
         pdf.savefig(ax.figure, bbox_inches="tight")
         plt.close()
 
-        # ===
-        fig, ax = plt.subplots()
-        sub_violinplots_args = violinplot_args.copy()
-        sub_violinplots_args["inner"] = None
-        handles, labels = [], []
-        for (hue, group), color in zip(
-                detailed_groups.groupby(detailed_groups, sort=False),
-                sns.color_palette(None, detailed_groups.unique().size)):
-            sub_violinplots_args["data"] = df.loc[group.index]
-            sub_violinplots_args["x"] = groups[group.index]
-            sub_violinplots_args["palette"] = (color, .5 + .5 * np.array(color))
-            sns.violinplot(**sub_violinplots_args, alpha=.25, legend=False)
-            handles.append(plt.Rectangle((0, 0), 0, 0,
-                                         fc=color))
-            labels.append(hue)
-
-        fig.legend(
-            labels=labels, handles=handles,
-            title="arch-detailed",
-        )
-
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-        # ===
+        # # ===
+        # fig, ax = plt.subplots()
+        # sub_violinplots_args = violinplot_args.copy()
+        # sub_violinplots_args["inner"] = None
+        # handles, labels = [], []
+        # for (hue, group), color in zip(
+        #         detailed_groups.groupby(detailed_groups, sort=False),
+        #         sns.color_palette(None, detailed_groups.unique().size)):
+        #     sub_violinplots_args["data"] = df.loc[group.index]
+        #     sub_violinplots_args["x"] = groups[group.index]
+        #     sub_violinplots_args["palette"] = (color, .5 + .5 * np.array(color))
+        #     sns.violinplot(**sub_violinplots_args, alpha=.25, legend=False)
+        #     handles.append(plt.Rectangle((0, 0), 0, 0,
+        #                                  fc=color))
+        #     labels.append(hue)
+        #
+        # fig.legend(
+        #     labels=labels, handles=handles,
+        #     title="arch-detailed",
+        # )
+        #
+        # pdf.savefig(fig, bbox_inches="tight")
+        # plt.close()
+        # # ===
 
 
     def _process(_path):

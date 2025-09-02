@@ -20,7 +20,7 @@ prefix(){
 
 (
   # First MLP-based
-  for reward in distance kernels
+  for reward in ant #distance kernels
   do
     echo $reward/mlp-0-0 $seeds --reward $reward --policy mlp --depth 0 $@
 

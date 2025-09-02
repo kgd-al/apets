@@ -76,6 +76,8 @@ echo "$ntasks tasks"
 sbatch --nodes=1 --ntasks 1 --cpus-per-task 1 --job-name=rerun-all-all --time=10:00:00 <<EOF
 #!/bin/bash
 
+source ~/code/venv/bin/activate
+
 i=0
 cat .tasks | while read cmd
 do

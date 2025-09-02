@@ -149,6 +149,7 @@ class MoveFitness(SubTaskFitnessData):
     class RewardType(Enum):
         DISTANCE = auto()
         KERNELS = auto()
+        ANT = auto()
 
     class KernelAtomicRewards(Enum):
         Vx = auto()
@@ -161,6 +162,18 @@ class MoveFitness(SubTaskFitnessData):
         KernelAtomicRewards.Vy.name: .25,
         KernelAtomicRewards.Vz.name: .125,
         KernelAtomicRewards.z.name: .125,
+    }
+
+    class AntAtomicRewards(Enum):
+        Fwd = auto()
+        Ctrl = auto()
+        Cont = auto()
+
+    # From https://gymnasium.farama.org/environments/mujoco/ant/#reward
+    ant_atomic_reward_weights = {
+        AntAtomicRewards.Fwd.name: 1,
+        AntAtomicRewards.Ctrl.name: -.5,
+        AntAtomicRewards.Cont.name: -5e-4,
     }
 
     def __init__(self, reward: RewardType, forward=True,
@@ -220,7 +233,9 @@ class MoveFitness(SubTaskFitnessData):
         if self._log_rewards:
             self._data_rewards = pd.DataFrame(
                 index=pd.Index([], name="t"),
-                columns=[e.name for e in self.KernelAtomicRewards]
+                columns=[enum.__name__[0] + "_" + e.name
+                         for enum in [self.KernelAtomicRewards, self.AntAtomicRewards]
+                         for e in enum]
             )
 
         if self._introspective:
@@ -283,16 +298,31 @@ class MoveFitness(SubTaskFitnessData):
         self._reward = 0
 
         if self.reward_type is self.RewardType.KERNELS or self._log_rewards:
-            KAR = self.KernelAtomicRewards
+            k = self.KernelAtomicRewards
             k_rewards = {
-                KAR.Vx: krb(self.velocity.x, .5, -25),
-                KAR.Vy: krb(abs(self.velocity.y), 0, -5),
-                KAR.Vz: krb(self.velocity.z, 0, -5),
-                KAR.z: krb(pos.z - self.original_height, .05, -2e3)
+                k.Vx: krb(self.velocity.x, .5, -25),
+                k.Vy: krb(abs(self.velocity.y), 0, -5),
+                k.Vz: krb(self.velocity.z, 0, -5),
+                k.z: krb(pos.z - self.original_height, .05, -2e3)
             }
             k_reward = sum(
                 self.kernal_atomic_reward_weights[c.name] * v
                 for c, v in k_rewards.items()
+            )
+
+        if self.reward_type is self.RewardType.ANT or self._log_rewards:
+            a = self.AntAtomicRewards
+            mujoco.mj_rnePostConstraint(model, data)
+            raw_contact_forces = data.cfrc_ext
+            contact_forces = np.clip(raw_contact_forces, -1, 1)
+            a_rewards = {
+                a.Fwd: self.velocity.x,
+                a.Ctrl: np.sum(np.square(data.ctrl)),
+                a.Cont: np.sum(np.square(contact_forces)),
+            }
+            a_reward = sum(
+                self.ant_atomic_reward_weights[c.name] * v
+                for c, v in a_rewards.items()
             )
 
         match self.reward_type:
@@ -300,17 +330,26 @@ class MoveFitness(SubTaskFitnessData):
                 self._reward += self.state * self.curr_delta.x
             case self.RewardType.KERNELS:
                 self._reward += k_reward
+            case self.RewardType.ANT:
+                self._reward += a_reward
 
         self._infos["time"] = data.time
 
         if self._log_rewards:
-            self._data_rewards.loc[data.time] = {
-                c.name: self.kernal_atomic_reward_weights[c.name] * v
+            _row = {}
+            _row.update({
+                "K_" + c.name: self.kernal_atomic_reward_weights[c.name] * v
                 for c, v in k_rewards.items()
-            }
+            })
+            _row.update({
+                "L_" + c.name: self.ant_atomic_reward_weights[c.name] * v
+                for c, v in a_rewards.items()
+            })
+            self._data_rewards.loc[data.time] = _row
             for c, v in k_rewards.items():
                 self._infos[c.name] += dt * v
             self._infos["kernels"] += dt * k_reward
+            self._infos["ant"] += dt * a_reward
 
         self._fitness += self._reward
 
@@ -342,7 +381,7 @@ class MoveFitness(SubTaskFitnessData):
 
     @staticmethod
     def initial_infos():
-        return defaultdict(int)
+        return defaultdict(int, time=0)
 
     @property
     def infos(self):
@@ -469,22 +508,31 @@ class MoveFitness(SubTaskFitnessData):
         return fig
 
     def plot_rewards(self):
-        fig, ax = plt.subplots()
-        lines = []
-        ax2 = ax.twinx()
-        lines.extend(
-            ax2.plot(self._data_rewards.index, self._data_rewards.sum(axis=1),
-                     linestyle="dashed", color='gray', label="sum")
-        )
-        ax2.set_ylim(0, 1)
-        for c in self._data_rewards.columns:
+        fig, axes = plt.subplots(ncols=2, figsize=(8, 4),
+                                 sharex=True, sharey=False)
+        for ax, enum in zip(axes, [self.KernelAtomicRewards, self.AntAtomicRewards]):
+            lines = []
+            cols = [
+                c for c in self._data_rewards.columns
+                if c[0] == enum.__name__[0]
+            ]
+            ax2 = ax.twinx()
             lines.extend(
-                ax.plot(self._data_rewards.index,
-                        self._data_rewards[c],
-                        label=c))
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("Atomic reward")
-        ax.legend(handles=lines)
+                ax2.plot(self._data_rewards.index, self._data_rewards[cols].sum(axis=1),
+                         linestyle="dashed", color='gray', label="sum")
+            )
+            if enum is self.KernelAtomicRewards:
+                ax2.set_ylim(0, 1)
+            for c in cols:
+                lines.extend(
+                    ax.plot(self._data_rewards.index,
+                            self._data_rewards[c],
+                            label=c))
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Atomic rewards")
+            ax2.set_ylabel("Summed reward")
+            ax.legend(handles=lines)
+        fig.tight_layout()
         return fig
 
     def plot_joints(self):
