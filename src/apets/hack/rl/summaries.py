@@ -9,6 +9,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import LogNorm
 from pandas import Series
 from statannotations.Annotator import Annotator
 
@@ -23,6 +24,7 @@ if args.purge and df_file.exists():
 
 if df_file.exists():
     df = pd.read_csv(df_file, index_col=0)
+    rewards = df.reward.unique().tolist()
 
 else:
     df = pd.concat(
@@ -73,6 +75,12 @@ else:
     df["groups"] = _make_groups(_overview=True)
     df["detailed-groups"] = _make_groups(_overview=False)
 
+    rewards = df.reward.unique().tolist()
+    def _normalize(_df): return (_df - _df.min()) / (_df.max() - _df.min())
+    for r in rewards:
+        index = (df.reward == r)
+        df.loc[index, "normalized_reward"] = _normalize(df.loc[index, r])
+
     df.to_csv(df_file)
 
 
@@ -80,14 +88,13 @@ def groups(_detailed):
     return df["detailed-groups"] if _detailed else df["groups"]
 
 
+print(rewards)
 print(df.columns)
 print(df)
 
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
 # print()
-
-rewards = df.reward.unique()
 
 print()
 print("Bests")
@@ -165,8 +172,8 @@ if not pareto_folder.exists():
         showcase(p, pareto_folder)
     print()
 
-
 print("Plotting...")
+
 
 sns.set_style("darkgrid")
 pdf_file = args.root.joinpath("summary.pdf")
@@ -200,7 +207,10 @@ with (PdfPages(pdf_file) as pdf):
         g.axes.plot(pareto.speed, pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
                     label="Pareto front")
         g.axes.legend()
+        pdf.savefig(g.figure, bbox_inches="tight")
+        plt.close()
 
+        g = sns.scatterplot(df, x="avg_d_o", y="normalized_reward", hue=groups(detailed), style="reward")
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
@@ -209,36 +219,41 @@ with (PdfPages(pdf_file) as pdf):
             plot(x="params", y=k, errorbar=("pi", 100), err_style="band", detailed=detailed)
     print()
 
+    print("Purging ant data")
+    df = df[~(df.reward == "ant")]
+    rewards.remove("ant")
+
     tested_pairs = [
         ((a, b), (c, d)) for ((a, b), (c, d)) in
         itertools.combinations(itertools.product(df["groups"].unique(), df["reward"].unique()), r=2)
         if a == c or b == d
     ]
+    tests = pd.DataFrame(index=tested_pairs, columns=[])
     print("Testing", len(tested_pairs), "pairs:", tested_pairs)
     annotator = None
 
     plot(x="params", y="tps")
     # for c in ["avg_d_o", "Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
-    for c in [c for c in df.columns if ("avg" in c or "std" in c)]:
+    for c in rewards + [c for c in df.columns if ("avg" in c or "std" in c)]:
         print(c)
         plot(x="params", y=c)
 
         # ===
         violinplot_args = dict(
             data=df, x="groups", y=c, hue="reward",
-            inner="quarts", cut=0,
-            common_norm=True, density_norm="area"
+            inner="box", cut=0, gap=.25,
+            common_norm=True, density_norm="width"
         )
 
         ax = sns.violinplot(**violinplot_args)
 
-        # annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
-        # annotator.configure(test="Mann-Whitney", verbose=2,
-        #                     hide_non_significant=True, text_format="simple",
-        #                     comparisons_correction="bonferroni")
-        # _, corrected_results = annotator.apply_and_annotate()
-        # print([r.data.pvalue for r in corrected_results])
-        # print()
+        annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
+        annotator.configure(test="Mann-Whitney", verbose=2,
+                            hide_non_significant=True, text_format="simple",
+                            comparisons_correction="bonferroni")
+        _, corrected_results = annotator.apply_and_annotate()
+        tests[c] = [r.data.pvalue for r in corrected_results]
+        print()
 
         pdf.savefig(ax.figure, bbox_inches="tight")
         plt.close()
@@ -268,13 +283,20 @@ with (PdfPages(pdf_file) as pdf):
         # plt.close()
         # # ===
 
+    tests = tests.map(lambda x: x if x <= 0.05 else np.nan)
+    g = sns.heatmap(tests, annot=True, cmap="magma_r", fmt=".2g", annot_kws=dict(size=3), norm=LogNorm())
+    pdf.savefig(g.figure, bbox_inches="tight")
+    plt.close()
 
     def _process(_path):
-        _path = Path(_path)
-        _df = pd.read_csv(_path.joinpath("motors.csv"))
-        _df["Path"] = _path
-        _df["Valid"] = _df.f.map(lambda x: .1 <= x <= 10)
-        return _df
+        try:
+            _path = Path(_path)
+            _df = pd.read_csv(_path.joinpath("motors.csv"))
+            _df["Path"] = _path
+            _df["Valid"] = _df.f.map(lambda x: .1 <= x <= 10)
+            return _df
+        except FileNotFoundError:
+            return None
 
     for df_name, base_df in [("all champions", champs)]:#, ("the pareto front", pareto)]:
         df = pd.concat([_process(f) for f in base_df.index])
