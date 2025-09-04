@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import math
+import pprint
 import shutil
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import LogNorm
 from pandas import Series
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler
 from statannotations.Annotator import Annotator
 
 parser = argparse.ArgumentParser("Summarizes summary.csv files")
@@ -177,7 +179,41 @@ print("Plotting...")
 
 sns.set_style("darkgrid")
 pdf_file = args.root.joinpath("summary.pdf")
-with (PdfPages(pdf_file) as pdf):
+with PdfPages(pdf_file) as pdf:
+
+    # Scaled normalized rewards
+    for r in rewards:
+        index = (df.reward == r)
+        df.loc[index, "normalized_reward"] = (
+            StandardScaler().fit_transform(np.array(df.loc[index, r]).reshape(-1, 1)))
+    g = sns.scatterplot(df, x="avg_d_o", y="normalized_reward",
+                        hue=groups(_detailed=False), style="reward")
+
+    points = np.array([(a, b) for a, b in zip(1 - df["avg_d_o"], df["normalized_reward"])])
+    pprint.pprint(points)
+    pareto = _pareto(points)
+    print(pareto)
+    pareto = df.iloc[pareto]
+    print(pareto[["normalized_reward", "avg_d_o"]])
+
+    print()
+    print("Pareto front:")
+    print()
+    print(pareto.groupby(["reward"]).size())
+    print()
+    print(pareto.groupby(["detailed-groups"]).size())
+    print()
+    print(pareto.groupby(["reward", "detailed-groups"]).size())
+    print()
+
+    g.axes.plot(pareto.avg_d_o, pareto.normalized_reward, 'r--', lw=.5, zorder=5, marker='D',
+                label="Pareto front")
+
+    g.legend().remove()
+    g.figure.legend(loc='outside right')
+    pdf.savefig(g.figure, bbox_inches="tight")
+    plt.close()
+    exit(42)
     # g = sns.scatterplot(df, x="params", y="depth")
     # plt.xscale('log', base=10)
     # pdf.savefig(g.figure, bbox_inches="tight")
@@ -221,6 +257,7 @@ with (PdfPages(pdf_file) as pdf):
 
     print("Purging ant data")
     df = df[~(df.reward == "ant")]
+    champs = champs[~(champs.reward == "ant")]
     rewards.remove("ant")
 
     tested_pairs = [
