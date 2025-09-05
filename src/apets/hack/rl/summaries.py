@@ -78,17 +78,17 @@ else:
     df["detailed-groups"] = _make_groups(_overview=False)
 
     rewards = df.reward.unique().tolist()
-    def _normalize(_df): return (_df - _df.min()) / (_df.max() - _df.min())
     for r in rewards:
         index = (df.reward == r)
-        df.loc[index, "normalized_reward"] = _normalize(df.loc[index, r])
+        df.loc[index, "normalized_reward"] = StandardScaler().fit_transform(np.array(df.loc[index, r]).reshape(-1, 1))
 
     df.to_csv(df_file)
 
 
-def groups(_detailed):
-    return df["detailed-groups"] if _detailed else df["groups"]
+def groups(_detailed): return df["detailed-groups"] if _detailed else df["groups"]
 
+
+groups_hue_order = sorted(df.groups.unique().tolist())
 
 print(rewards)
 print(df.columns)
@@ -158,11 +158,17 @@ def _pareto(_points):
     return sorted(is_efficient, key=lambda i: math.atan2(_original_points[i][1], _original_points[i][0]))
 
 
-pareto = _pareto(np.array([(a, b) for a, b in zip(df["speed"], df["kernels"])]))
-pareto = df.iloc[pareto][columns]
+ss_pareto = _pareto(np.array([(a, b) for a, b in zip(df["speed"], df["kernels"])]))
+ss_pareto = df.iloc[ss_pareto][columns]
 
-print("Pareto front")
-print(pareto)
+print("Speed vs Stability pareto front")
+print(ss_pareto)
+print()
+print(ss_pareto.groupby(["reward"]).size())
+print()
+print(ss_pareto.groupby(["detailed-groups"]).size())
+print()
+print(ss_pareto.groupby(["reward", "detailed-groups"]).size())
 print()
 
 pareto_folder = args.root.joinpath("showcase").joinpath("pareto")
@@ -170,9 +176,27 @@ if args.purge:
     shutil.rmtree(pareto_folder, ignore_errors=True)
 if not pareto_folder.exists():
     pareto_folder.mkdir(parents=True)
-    for p in pareto.index:
+    for p in ss_pareto.index:
         showcase(p, pareto_folder)
     print()
+
+
+print("Performance vs energy pareto front")
+print()
+
+pe_pareto = df.iloc[_pareto(np.array([(a, b) for a, b in zip(1 - df["avg_d_o"], df["normalized_reward"])]))]
+print(pe_pareto[columns])
+
+print()
+print("Pareto front:")
+print()
+print(pe_pareto.groupby(["reward"]).size())
+print()
+print(pe_pareto.groupby(["detailed-groups"]).size())
+print()
+print(pe_pareto.groupby(["reward", "detailed-groups"]).size())
+print()
+
 
 print("Plotting...")
 
@@ -180,40 +204,6 @@ print("Plotting...")
 sns.set_style("darkgrid")
 pdf_file = args.root.joinpath("summary.pdf")
 with PdfPages(pdf_file) as pdf:
-
-    # Scaled normalized rewards
-    for r in rewards:
-        index = (df.reward == r)
-        df.loc[index, "normalized_reward"] = (
-            StandardScaler().fit_transform(np.array(df.loc[index, r]).reshape(-1, 1)))
-    g = sns.scatterplot(df, x="avg_d_o", y="normalized_reward",
-                        hue=groups(_detailed=False), style="reward")
-
-    points = np.array([(a, b) for a, b in zip(1 - df["avg_d_o"], df["normalized_reward"])])
-    pprint.pprint(points)
-    pareto = _pareto(points)
-    print(pareto)
-    pareto = df.iloc[pareto]
-    print(pareto[["normalized_reward", "avg_d_o"]])
-
-    print()
-    print("Pareto front:")
-    print()
-    print(pareto.groupby(["reward"]).size())
-    print()
-    print(pareto.groupby(["detailed-groups"]).size())
-    print()
-    print(pareto.groupby(["reward", "detailed-groups"]).size())
-    print()
-
-    g.axes.plot(pareto.avg_d_o, pareto.normalized_reward, 'r--', lw=.5, zorder=5, marker='D',
-                label="Pareto front")
-
-    g.legend().remove()
-    g.figure.legend(loc='outside right')
-    pdf.savefig(g.figure, bbox_inches="tight")
-    plt.close()
-    exit(42)
     # g = sns.scatterplot(df, x="params", y="depth")
     # plt.xscale('log', base=10)
     # pdf.savefig(g.figure, bbox_inches="tight")
@@ -239,26 +229,46 @@ with PdfPages(pdf_file) as pdf:
         plt.close()
 
     for detailed in [False, True]:
+        # Speed vs kernels + pareto front
+
         g = sns.scatterplot(df, x="speed", y="kernels", hue=groups(detailed), style="reward")
-        g.axes.plot(pareto.speed, pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
+        g.axes.plot(ss_pareto.speed, ss_pareto.kernels, 'r--', lw=.5, zorder=-10, marker='D',
                     label="Pareto front")
         g.axes.legend()
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
 
-        g = sns.scatterplot(df, x="avg_d_o", y="normalized_reward", hue=groups(detailed), style="reward")
+        # ===
+        # = Energy vs performance + pareto front
+
+        args = dict(
+            x="avg_d_o", y="normalized_reward",
+            hue="groups", hue_order=groups_hue_order,
+            style="reward"
+        )
+
+        # Scaled normalized rewards
+        for r in rewards:
+            index = (df.reward == r)
+            df.loc[index, "normalized_reward"] = (
+                StandardScaler().fit_transform(np.array(df.loc[index, r]).reshape(-1, 1)))
+        g = sns.scatterplot(df, **args)
+
+        g.axes.plot(pe_pareto.avg_d_o, pe_pareto.normalized_reward, 'r--', lw=.5, zorder=5, marker='D',
+                    markeredgecolor='k', markersize=7, label="Pareto front")
+        sns.scatterplot(pe_pareto, **args, ax=g.axes, zorder=10, legend=False)
+
+        g.legend().remove()
+        g.figure.legend(loc='outside right')
         pdf.savefig(g.figure, bbox_inches="tight")
         plt.close()
+
+        # ====
 
         for k in rewards:
             plot(x="params", y=k, detailed=detailed)
             plot(x="params", y=k, errorbar=("pi", 100), err_style="band", detailed=detailed)
     print()
-
-    print("Purging ant data")
-    df = df[~(df.reward == "ant")]
-    champs = champs[~(champs.reward == "ant")]
-    rewards.remove("ant")
 
     tested_pairs = [
         ((a, b), (c, d)) for ((a, b), (c, d)) in
