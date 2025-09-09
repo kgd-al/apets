@@ -2,6 +2,7 @@
 import argparse
 import itertools
 import math
+import pickle
 import random
 import subprocess
 from enum import Enum, auto
@@ -16,6 +17,7 @@ from revolve2.modular_robot import ModularRobot, ModularRobotControlInterface
 from revolve2.modular_robot.body.base import ActiveHinge
 from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2, BrickV2
 from revolve2.modular_robot.brain import Brain, BrainInstance
+from revolve2.modular_robot.brain.cpg import BrainCpgNetworkStatic
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 from revolve2.modular_robot_physical import Config, UUIDKey
 from revolve2.modular_robot_physical.remote import run_remote
@@ -120,8 +122,15 @@ class HingePinDebuggingBrainFactory(Brain):
         SQUARE = auto()
         RANDOM = auto()
 
-    def __init__(self, hinges, index, d_type):
-        self._target_hinge = hinges[index]
+    def __init__(self, hinges, args):
+        index = args.debug_hinge
+        if index is not None:
+            self._target_hinge = lambda _: hinges[index]
+        elif args.debug_hinges:
+            n = len(hinges)
+            self._target_hinge = lambda t: hinges[min(n, int(n * t / args.duration))]
+
+        d_type = args.debug_type
         if isinstance(d_type, str):
             d_type = self.DebugTypes[d_type]
         self._type = d_type
@@ -139,6 +148,7 @@ class HingePinDebuggingBrainFactory(Brain):
             self._target_hinge = target_hinge
             self._function = function
             self._time = 0
+            self._last_hinge = None
 
         def control(
             self,
@@ -147,9 +157,14 @@ class HingePinDebuggingBrainFactory(Brain):
             control_interface: ModularRobotControlInterface,
         ) -> None:
             self._time += dt
-            target = self._function(self._time) * self._target_hinge.range
-            print(self._time, sensor_state.get_active_hinge_sensor_state(self._target_hinge), ">>", target)
-            control_interface.set_active_hinge_target(self._target_hinge, target)
+            hinge = self._target_hinge(self._time)
+            if self._last_hinge is not None and self._last_hinge != hinge:
+                control_interface.set_active_hinge_target(self._last_hinge, 0)
+
+            target = self._function(self._time) * hinge.range
+            print(self._time, sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor), ">>", target)
+            control_interface.set_active_hinge_target(hinge, target)
+            self._last_hinge = hinge
 
 
 class RLBrainFactory(Brain):
@@ -175,7 +190,7 @@ class RLBrainFactory(Brain):
             control_interface: ModularRobotControlInterface,
         ) -> None:
             self._time += dt
-            print(self._time)
+            print(self._time, dt)
             obs = np.clip([
                 sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor).position
                 / hinge.range
@@ -192,6 +207,48 @@ class RLBrainFactory(Brain):
                 )
 
 
+class RobotControllerTrackerFactory(Brain):
+    def __init__(self, brain: Brain, hinges):
+        self._brain = brain
+        self._hinges = hinges
+
+        self.plot_header = ["time"] + [f"obs{i}" for i in range(len(hinges))] + [f"action{i}" for i in range(len(hinges))]
+        self.plot_data = [[] for _ in range(1 + 2 * len(hinges))]
+
+    def make_instance(self) -> BrainInstance:
+        return self.Instance(self._brain.make_instance(), self._hinges, self.plot_data)
+
+    class Instance(BrainInstance):
+        def __init__(self, brain: BrainInstance, hinges, plot_data):
+            self._brain = brain
+            self._hinges = hinges
+            self._plot_data = plot_data
+            self._time = 0
+
+        def control(
+            self,
+            dt: float,
+            sensor_state: ModularRobotSensorState,
+            control_interface: ModularRobotControlInterface,
+        ) -> None:
+            self._time += dt
+            print(self._time, dt)
+            obs = [
+                sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor).position
+                / hinge.range
+                for i, hinge in enumerate(self._hinges)
+            ]
+
+            self._brain.control(dt, sensor_state, control_interface)
+
+            hinges_dict = dict(control_interface._set_active_hinges)
+            print(hinges_dict)
+            actions = [hinges_dict.get(UUIDKey(h), float("nan")) for h in self._hinges]
+            print(actions)
+            for _i, x in enumerate(itertools.chain([self._time], obs, actions)):
+                self._plot_data[_i].append(x)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser("Main entry point for robot hardware control")
     parser.add_argument("--ip", required=True, help="ip address of the robot")
@@ -202,15 +259,17 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group()
 
     group.add_argument("--debug-hinge", type=int, default=None,
-                        help="Index of the hinge to debug")
+                       help="Index of the hinge to debug")
+    group.add_argument("--debug-hinges", default=False, action="store_true",
+                       help="Debug all hinges in sequence")
     parser.add_argument("--debug-type", choices=[e.name for e in HingePinDebuggingBrainFactory.DebugTypes],
                         help="Specify the type of function used to send signals")
 
-    group.add_argument("--model", type=Path)
+    group.add_argument("--brain", type=Path)
 
     args = parser.parse_args()
 
-    debugging = args.debug_hinge is not None
+    debugging = args.debug_hinge is not None or args.debug_hinges
 
     """Remote control a physical modular robot."""
     """
@@ -223,22 +282,18 @@ def main() -> None:
     body = BODIES[args.body]()
     hinges = body.find_modules_of_type(ActiveHinge)
 
-    w, h = matplotlib.rcParams["figure.figsize"]
-    fig, axes = plt.subplots(len(hinges), 2,
-                             sharex=True, sharey=True,
-                             figsize=(3 * w, 2 * h))
-
-    plot_data = [[] for _ in range(1+2*len(hinges))]
-    def plot_callback(time, observations, actions):
-        for i, x in enumerate(itertools.chain([time], observations, actions)):
-            plot_data[i].append(x)
-
     # brain = BrainCpgNetworkNeighborRandom(body=body, rng=make_rng_time_seed())
     if debugging:
-        brain = HingePinDebuggingBrainFactory(
-            hinges=hinges, index=args.debug_hinge, d_type=args.debug_type)
-    elif args.model is not None:
-        brain = RLBrainFactory(args.model, hinges, plot_callback)
+        brain = HingePinDebuggingBrainFactory(hinges=hinges, args=args)
+    elif args.brain is not None:
+        # brain = RLBrainFactory(args.model, hinges, plot_callback)
+        with open(args.brain, "rb") as f:
+            brain = pickle.load(f)
+
+            if isinstance(brain, BrainCpgNetworkStatic):
+                brain._output_mapping = [(i, h) for i, h in enumerate(hinges)]
+
+    brain = RobotControllerTrackerFactory(brain, hinges)
 
     robot = ModularRobot(body, brain)
 
@@ -287,12 +342,12 @@ def main() -> None:
     config = Config(
         modular_robot=robot,
         hinge_mapping=hinge_mapping,
-        run_duration=5 if debugging else args.duration,
+        run_duration=args.duration,
         control_frequency=20,
         initial_hinge_positions={UUIDKey(active_hinge): 0.0 for active_hinge in hinges},
         inverse_servos={
-            hinge_mapping[UUIDKey(h)]: True
-            for h in [h2, h4, h6, h8]
+            # hinge_mapping[UUIDKey(h)]: True
+            # for h in [h2, h4, h6, h8]
         },
     )
 
@@ -305,7 +360,7 @@ def main() -> None:
     print("Initializing robot..")
     run_remote(
         config=config,
-        hostname=args.ip,  # "Set the robot IP here.
+        hostname=args.ip,
         debug=False,
         on_prepared=on_prepared,
         display_camera_view=False,
@@ -316,9 +371,19 @@ def main() -> None:
     """
 
     print("Plotting")
+    w, h = matplotlib.rcParams["figure.figsize"]
+    fig, axes = plt.subplots(len(hinges), 2,
+                             sharex=True, sharey=True,
+                             figsize=(3 * w, 2 * h))
+
+    plot_data = brain.plot_data
+
     for i in range(len(hinges)):
         for j in range(2):
-            axes[i][j].relplot(plot_data[0], plot_data[1 + j * len(hinges) + i])
+            ax = axes[i][j]
+            ix = 1 + j * len(hinges) + i
+            ax.plot(plot_data[0], plot_data[ix])
+            ax.set_title(brain.plot_header[ix])
     fig.tight_layout()
     fig.savefig("hinges.pdf")
 
