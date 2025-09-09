@@ -318,7 +318,7 @@ def main() -> None:
     print("Plotting")
     for i in range(len(hinges)):
         for j in range(2):
-            axes[i][j].plot(plot_data[0], plot_data[1+j*len(hinges)+i])
+            axes[i][j].relplot(plot_data[0], plot_data[1 + j * len(hinges) + i])
     fig.tight_layout()
     fig.savefig("hinges.pdf")
 

@@ -149,7 +149,7 @@ class MoveFitness(SubTaskFitnessData):
     class RewardType(Enum):
         DISTANCE = auto()
         KERNELS = auto()
-        ANT = auto()
+        LAZY = auto()
 
     class KernelAtomicRewards(Enum):
         Vx = auto()
@@ -164,16 +164,16 @@ class MoveFitness(SubTaskFitnessData):
         KernelAtomicRewards.z.name: .125,
     }
 
-    class AntAtomicRewards(Enum):
+    class LazyAtomicRewards(Enum):
         Fwd = auto()
         Ctrl = auto()
         Cont = auto()
 
     # From https://gymnasium.farama.org/environments/mujoco/ant/#reward
-    ant_atomic_reward_weights = {
-        AntAtomicRewards.Fwd.name: 1,
-        AntAtomicRewards.Ctrl.name: -.5,
-        AntAtomicRewards.Cont.name: -5e-4,
+    lazy_atomic_reward_weights = {
+        LazyAtomicRewards.Fwd.name: 1,
+        LazyAtomicRewards.Ctrl.name: -5e-2,
+        LazyAtomicRewards.Cont.name: -5e-3,
     }
 
     def __init__(self, reward: RewardType, forward=True,
@@ -234,7 +234,7 @@ class MoveFitness(SubTaskFitnessData):
             self._data_rewards = pd.DataFrame(
                 index=pd.Index([], name="t"),
                 columns=[enum.__name__[0] + "_" + e.name
-                         for enum in [self.KernelAtomicRewards, self.AntAtomicRewards]
+                         for enum in [self.KernelAtomicRewards, self.LazyAtomicRewards]
                          for e in enum]
             )
 
@@ -310,19 +310,19 @@ class MoveFitness(SubTaskFitnessData):
                 for c, v in k_rewards.items()
             )
 
-        if self.reward_type is self.RewardType.ANT or self._log_rewards:
-            a = self.AntAtomicRewards
+        if self.reward_type is self.RewardType.LAZY or self._log_rewards:
+            l = self.LazyAtomicRewards
             mujoco.mj_rnePostConstraint(model, data)
             raw_contact_forces = data.cfrc_ext
             contact_forces = np.clip(raw_contact_forces, -1, 1)
-            a_rewards = {
-                a.Fwd: self.velocity.x,
-                a.Ctrl: np.sum(np.square(data.ctrl)),
-                a.Cont: np.sum(np.square(contact_forces)),
+            l_rewards = {
+                l.Fwd: self.velocity.x,
+                l.Ctrl: np.sum(np.square(data.ctrl)),
+                l.Cont: np.sum(np.square(contact_forces)),
             }
-            a_reward = sum(
-                self.ant_atomic_reward_weights[c.name] * v
-                for c, v in a_rewards.items()
+            l_reward = sum(
+                self.lazy_atomic_reward_weights[c.name] * v
+                for c, v in l_rewards.items()
             )
 
         match self.reward_type:
@@ -330,8 +330,8 @@ class MoveFitness(SubTaskFitnessData):
                 self._reward += self.state * self.curr_delta.x
             case self.RewardType.KERNELS:
                 self._reward += k_reward
-            case self.RewardType.ANT:
-                self._reward += a_reward
+            case self.RewardType.LAZY:
+                self._reward += l_reward
 
         self._infos["time"] = data.time
 
@@ -342,14 +342,14 @@ class MoveFitness(SubTaskFitnessData):
                 for c, v in k_rewards.items()
             })
             _row.update({
-                "L_" + c.name: self.ant_atomic_reward_weights[c.name] * v
-                for c, v in a_rewards.items()
+                "L_" + c.name: self.lazy_atomic_reward_weights[c.name] * v
+                for c, v in l_rewards.items()
             })
             self._data_rewards.loc[data.time] = _row
             for c, v in k_rewards.items():
                 self._infos[c.name] += dt * v
             self._infos["kernels"] += dt * k_reward
-            self._infos["ant"] += dt * a_reward
+            self._infos["lazy"] += dt * l_reward
 
         self._fitness += self._reward
 
@@ -474,25 +474,33 @@ class MoveFitness(SubTaskFitnessData):
 
     def do_plots(self, path: Path):
         with PdfPages(path.joinpath("trajectory.pdf")) as pdf:
-            pdf.savefig(self.plot_trajectory("r"))
-            pdf.savefig(self.plot_trajectory("R"))
+            if (d := getattr(self, "_prev_log_data", None)) is not None:
+                trajectory_data = d
+            else:
+                trajectory_data = self._data_trajectory
+
+            pdf.savefig(self.plot_trajectory(trajectory_data, "r"))
+            pdf.savefig(self.plot_trajectory(trajectory_data, "R"))
+
             pdf.savefig(self.plot_rewards())
+
             if self._introspective:
+                trajectory_data.to_csv(path.joinpath("trajectory.csv"))
+
                 fig, stats = self.plot_joints()
                 pdf.savefig(fig)
                 stats.to_csv(path.joinpath("motors.csv"))
+
                 fig, stats = self.plot_bodies()
                 pdf.savefig(fig)
                 stats.to_csv(path.joinpath("steps.csv"))
+
                 self._motor_data.to_csv(path.joinpath("joints_data.csv"))
                 self._bricks_data.to_csv(path.joinpath("bricks_data.csv"))
         plt.close("all")
 
-    def plot_trajectory(self, column="R"):
-        if (d := getattr(self, "_prev_log_data", None)) is not None:
-            data = d
-        else:
-            data = self._data_trajectory
+    @staticmethod
+    def plot_trajectory(data, column="R"):
         matplotlib.use("agg")
         fig, ax = plt.subplots()
         plot_multicolor(fig, ax, data.y, data.x, data[column])
@@ -510,7 +518,7 @@ class MoveFitness(SubTaskFitnessData):
     def plot_rewards(self):
         fig, axes = plt.subplots(ncols=2, figsize=(8, 4),
                                  sharex=True, sharey=False)
-        for ax, enum in zip(axes, [self.KernelAtomicRewards, self.AntAtomicRewards]):
+        for ax, enum in zip(axes, [self.KernelAtomicRewards, self.LazyAtomicRewards]):
             lines = []
             cols = [
                 c for c in self._data_rewards.columns
@@ -518,16 +526,16 @@ class MoveFitness(SubTaskFitnessData):
             ]
             ax2 = ax.twinx()
             lines.extend(
-                ax2.plot(self._data_rewards.index, self._data_rewards[cols].sum(axis=1),
-                         linestyle="dashed", color='gray', label="sum")
+                ax2.relplot(self._data_rewards.index, self._data_rewards[cols].sum(axis=1),
+                            linestyle="dashed", color='gray', label="sum")
             )
             if enum is self.KernelAtomicRewards:
                 ax2.set_ylim(0, 1)
             for c in cols:
                 lines.extend(
-                    ax.plot(self._data_rewards.index,
-                            self._data_rewards[c],
-                            label=c))
+                    ax.relplot(self._data_rewards.index,
+                               self._data_rewards[c],
+                               label=c))
             ax.set_xlabel("Time (s)")
             ax.set_ylabel("Atomic rewards")
             ax2.set_ylabel("Summed reward")
@@ -544,11 +552,11 @@ class MoveFitness(SubTaskFitnessData):
         x = self._motor_data.index
         for ax, c in zip(axes.T.flat, self._motor_data.columns):
             y = self._motor_data[c]
-            ax.plot(x, y, label=c)
+            ax.relplot(x, y, label=c)
             title = c
             try:
                 fit = fit_sin(x, y)
-                ax.plot(x, fit.pop("fn")(x))
+                ax.relplot(x, fit.pop("fn")(x))
                 fit["m"] = c
                 sin_fit_stats.append(fit)
                 title += ";" + fit["fn_str"]
@@ -573,11 +581,11 @@ class MoveFitness(SubTaskFitnessData):
         x = self._bricks_data.index
         for ax, (c, lbl) in zip(axes.flat, bricks):
             y = self._bricks_data[c]
-            ax.plot(x, y, label=lbl)
+            ax.relplot(x, y, label=lbl)
             title = lbl
             try:
                 fit = fit_sin(x, y)
-                ax.plot(x, fit.pop("fn")(x), lw=.5, ls='--')
+                ax.relplot(x, fit.pop("fn")(x), lw=.5, ls='--')
                 fit["b"] = c
                 sin_fit_stats.append(fit)
                 title += ": " + fit["fn_str"]
