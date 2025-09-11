@@ -526,16 +526,16 @@ class MoveFitness(SubTaskFitnessData):
             ]
             ax2 = ax.twinx()
             lines.extend(
-                ax2.relplot(self._data_rewards.index, self._data_rewards[cols].sum(axis=1),
-                            linestyle="dashed", color='gray', label="sum")
+                ax2.plot(self._data_rewards.index, self._data_rewards[cols].sum(axis=1),
+                         linestyle="dashed", color='gray', label="sum")
             )
             if enum is self.KernelAtomicRewards:
                 ax2.set_ylim(0, 1)
             for c in cols:
                 lines.extend(
-                    ax.relplot(self._data_rewards.index,
-                               self._data_rewards[c],
-                               label=c))
+                    ax.plot(self._data_rewards.index,
+                            self._data_rewards[c],
+                            label=c))
             ax.set_xlabel("Time (s)")
             ax.set_ylabel("Atomic rewards")
             ax2.set_ylabel("Summed reward")
@@ -552,11 +552,11 @@ class MoveFitness(SubTaskFitnessData):
         x = self._motor_data.index
         for ax, c in zip(axes.T.flat, self._motor_data.columns):
             y = self._motor_data[c]
-            ax.relplot(x, y, label=c)
+            ax.plot(x, y, label=c)
             title = c
             try:
                 fit = fit_sin(x, y)
-                ax.relplot(x, fit.pop("fn")(x))
+                ax.plot(x, fit.pop("fn")(x))
                 fit["m"] = c
                 sin_fit_stats.append(fit)
                 title += ";" + fit["fn_str"]
@@ -581,11 +581,11 @@ class MoveFitness(SubTaskFitnessData):
         x = self._bricks_data.index
         for ax, (c, lbl) in zip(axes.flat, bricks):
             y = self._bricks_data[c]
-            ax.relplot(x, y, label=lbl)
+            ax.plot(x, y, label=lbl)
             title = lbl
             try:
                 fit = fit_sin(x, y)
-                ax.relplot(x, fit.pop("fn")(x), lw=.5, ls='--')
+                ax.plot(x, fit.pop("fn")(x), lw=.5, ls='--')
                 fit["b"] = c
                 sin_fit_stats.append(fit)
                 title += ": " + fit["fn_str"]

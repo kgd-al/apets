@@ -2,21 +2,31 @@
 import argparse
 import itertools
 import math
+import os
 import pickle
+import pprint
 import random
 import subprocess
+import time
 from enum import Enum, auto
 from pathlib import Path
+from typing import Tuple, List, Optional
 
 import matplotlib
 import numpy as np
+import pandas as pd
+import torch
 from matplotlib import pyplot as plt
 from stable_baselines3 import PPO
+from torch import nn
 
-from revolve2.modular_robot import ModularRobot, ModularRobotControlInterface
-from revolve2.modular_robot.body.base import ActiveHinge
+from apets.hack.config import Config
+from revolve2.modular_robot import ModularRobot
+from revolve2.modular_robot import ModularRobotControlInterface
+from revolve2.modular_robot.body.base import Body, ActiveHinge
 from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2, BrickV2
-from revolve2.modular_robot.brain import Brain, BrainInstance
+from revolve2.modular_robot.brain import Brain as BrainFactory
+from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.brain.cpg import BrainCpgNetworkStatic
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 from revolve2.modular_robot_physical import Config, UUIDKey
@@ -59,35 +69,42 @@ def gecko_v2() -> BodyV2:
     return body
 
 
-def spider_v2() -> BodyV2:
+def spider_v2() -> Tuple[BodyV2, List[ActiveHinge]]:
     """
     Get the spider modular robot.
 
     :returns: the robot.
     """
     body = BodyV2()
+    hinges = list()
 
-    body.core_v2.left_face.bottom = ActiveHingeV2(np.pi / 2.0)
-    body.core_v2.left_face.bottom.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.left_face.bottom.attachment.front = ActiveHingeV2(0.0)
-    body.core_v2.left_face.bottom.attachment.front.attachment = BrickV2(0.0)
+    def hinge(angle, name):
+        h = ActiveHingeV2(angle)
+        h.name = name
+        hinges.append(h)
+        return h
 
-    body.core_v2.right_face.bottom = ActiveHingeV2(np.pi / 2.0)
-    body.core_v2.right_face.bottom.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.right_face.bottom.attachment.front = ActiveHingeV2(0.0)
-    body.core_v2.right_face.bottom.attachment.front.attachment = BrickV2(0.0)
-
-    body.core_v2.front_face.bottom = ActiveHingeV2(np.pi / 2.0)
+    body.core_v2.front_face.bottom = hinge(np.pi / 2.0, "FRH")
     body.core_v2.front_face.bottom.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.front_face.bottom.attachment.front = ActiveHingeV2(0.0)
+    body.core_v2.front_face.bottom.attachment.front = hinge(0.0, "FRK")
     body.core_v2.front_face.bottom.attachment.front.attachment = BrickV2(0.0)
 
-    body.core_v2.back_face.bottom = ActiveHingeV2(np.pi / 2.0)
+    body.core_v2.back_face.bottom = hinge(np.pi / 2.0, "BLH")
     body.core_v2.back_face.bottom.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.back_face.bottom.attachment.front = ActiveHingeV2(0.0)
+    body.core_v2.back_face.bottom.attachment.front = hinge(0.0, "BLK")
     body.core_v2.back_face.bottom.attachment.front.attachment = BrickV2(0.0)
 
-    return body
+    body.core_v2.left_face.bottom = hinge(np.pi / 2.0, "FLH")
+    body.core_v2.left_face.bottom.attachment = BrickV2(-np.pi / 2.0)
+    body.core_v2.left_face.bottom.attachment.front = hinge(0.0, "FLK")
+    body.core_v2.left_face.bottom.attachment.front.attachment = BrickV2(0.0)
+
+    body.core_v2.right_face.bottom = hinge(np.pi / 2.0, "BRH")
+    body.core_v2.right_face.bottom.attachment = BrickV2(-np.pi / 2.0)
+    body.core_v2.right_face.bottom.attachment.front = hinge(0.0, "BRK")
+    body.core_v2.right_face.bottom.attachment.front.attachment = BrickV2(0.0)
+
+    return body, hinges
 
 
 BODIES = {
@@ -96,7 +113,21 @@ BODIES = {
 }
 
 
-class HingePinDebuggingBrainFactory(Brain):
+class DummyBrain(BrainFactory):
+    def make_instance(self) -> BrainInstance:
+        return self.DummyBrainInstance()
+
+    class DummyBrainInstance(BrainInstance):
+        def control(
+            self,
+            dt: float,
+            sensor_state: ModularRobotSensorState,
+            control_interface: ModularRobotControlInterface,
+        ) -> None:
+            pass
+
+
+class HingePinDebuggingBrainFactory(BrainFactory):
     @staticmethod
     def periodic(fn, t, f): return fn(f * 2 * math.pi * t)
 
@@ -123,9 +154,14 @@ class HingePinDebuggingBrainFactory(Brain):
         RANDOM = auto()
 
     def __init__(self, hinges, args):
-        index = args.debug_hinge
-        if index is not None:
-            self._target_hinge = lambda _: hinges[index]
+        if args.debug_hinge is not None:
+            try:
+                hinge = hinges[int(args.debug_hinge)]
+            except ValueError:
+                hinge = {h.name: h for h in hinges}[args.debug_hinge]
+
+            self._target_hinge = lambda _: hinge
+
         elif args.debug_hinges:
             n = len(hinges)
             self._target_hinge = lambda t: hinges[min(n, int(n * t / args.duration))]
@@ -162,12 +198,12 @@ class HingePinDebuggingBrainFactory(Brain):
                 control_interface.set_active_hinge_target(self._last_hinge, 0)
 
             target = self._function(self._time) * hinge.range
-            print(self._time, sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor), ">>", target)
+            print(self._time, sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor).position, ">>", target)
             control_interface.set_active_hinge_target(hinge, target)
             self._last_hinge = hinge
 
 
-class RLBrainFactory(Brain):
+class RLBrainFactory(BrainFactory):
     def __init__(self, path: Path, hinges, callback):
         self._model = PPO.load(path, device="cpu")
         self._hinges = hinges
@@ -207,16 +243,19 @@ class RLBrainFactory(Brain):
                 )
 
 
-class RobotControllerTrackerFactory(Brain):
-    def __init__(self, brain: Brain, hinges):
-        self._brain = brain
-        self._hinges = hinges
+class RobotControllerTrackerFactory(BrainFactory):
+    def __init__(self, brain: BrainFactory, hinges: List[ActiveHinge]):
+        self.brain = brain
+        self.hinges = hinges
 
-        self.plot_header = ["time"] + [f"obs{i}" for i in range(len(hinges))] + [f"action{i}" for i in range(len(hinges))]
+        names = [h.name for h in hinges]
+        print("[kgd-debug] hinges:", names)
+
+        self.plot_header = ["time"] + [f"{n}-obs" for n in names] + [f"{n}-ctrl" for n in names]
         self.plot_data = [[] for _ in range(1 + 2 * len(hinges))]
 
     def make_instance(self) -> BrainInstance:
-        return self.Instance(self._brain.make_instance(), self._hinges, self.plot_data)
+        return self.Instance(self.brain.make_instance(), self.hinges, self.plot_data)
 
     class Instance(BrainInstance):
         def __init__(self, brain: BrainInstance, hinges, plot_data):
@@ -225,6 +264,12 @@ class RobotControllerTrackerFactory(Brain):
             self._plot_data = plot_data
             self._time = 0
 
+            # Debug variable
+            self.single_hinge = os.environ.get("DEBUG_HINGE", None)
+            self.single_hinge = int(self.single_hinge) if self.single_hinge is not None else None
+
+            print("[kgd-debug] hinges:", [h.name for h in self._hinges])
+
         def control(
             self,
             dt: float,
@@ -232,7 +277,8 @@ class RobotControllerTrackerFactory(Brain):
             control_interface: ModularRobotControlInterface,
         ) -> None:
             self._time += dt
-            print(self._time, dt)
+            print(f"[kgd-debug] {self._time}, {dt}")
+            print("[kgd-debug] hinges:", [(i, h.name) for i, h in enumerate(self._hinges)])
             obs = [
                 sensor_state.get_active_hinge_sensor_state(hinge.sensors.active_hinge_sensor).position
                 / hinge.range
@@ -241,12 +287,22 @@ class RobotControllerTrackerFactory(Brain):
 
             self._brain.control(dt, sensor_state, control_interface)
 
+            if self.single_hinge is not None:
+                control_interface._set_active_hinges = [
+                    (key, value) for key, value in control_interface._set_active_hinges
+                    if key == UUIDKey(self._hinges[self.single_hinge])
+                ]
+
             hinges_dict = dict(control_interface._set_active_hinges)
-            print(hinges_dict)
             actions = [hinges_dict.get(UUIDKey(h), float("nan")) for h in self._hinges]
-            print(actions)
+            # print(f"[kgd-debug] {actions=}")
+
+            # print("[kgd-debug] randomized action buffer")
+            # random.Random(0).shuffle(actions)
+
             for _i, x in enumerate(itertools.chain([self._time], obs, actions)):
                 self._plot_data[_i].append(x)
+            print("[kgd-debug] last plot data line:", [f"{d[-1]:.2f}" for d in self._plot_data])
 
 
 def main() -> None:
@@ -258,14 +314,17 @@ def main() -> None:
 
     group = parser.add_mutually_exclusive_group()
 
-    group.add_argument("--debug-hinge", type=int, default=None,
+    group.add_argument("--debug-hinge", default=None,
                        help="Index of the hinge to debug")
     group.add_argument("--debug-hinges", default=False, action="store_true",
                        help="Debug all hinges in sequence")
     parser.add_argument("--debug-type", choices=[e.name for e in HingePinDebuggingBrainFactory.DebugTypes],
                         help="Specify the type of function used to send signals")
+    parser.add_argument("--no-plots", default=False, action="store_true",
+                        help="Disables plotting (e.g. for many sequential tests)")
 
-    group.add_argument("--brain", type=Path)
+    group.add_argument("--brain", type=Path, help="Pre-processed controller for the robot. See `extract_controller.py`")
+    group.add_argument("--reset", default=False, action="store_true", help="Reset hinges to 0")
 
     args = parser.parse_args()
 
@@ -279,19 +338,27 @@ def main() -> None:
     if args.body.endswith("45"):
         args.body = args.body[:-2]
         args.rotated = True
-    body = BODIES[args.body]()
-    hinges = body.find_modules_of_type(ActiveHinge)
+    body, hinges = BODIES[args.body]()
+    hinge_names = {h.name: h for h in hinges}
 
     # brain = BrainCpgNetworkNeighborRandom(body=body, rng=make_rng_time_seed())
-    if debugging:
+    if args.reset:
+        brain = DummyBrain()
+    elif debugging:
         brain = HingePinDebuggingBrainFactory(hinges=hinges, args=args)
     elif args.brain is not None:
         # brain = RLBrainFactory(args.model, hinges, plot_callback)
         with open(args.brain, "rb") as f:
             brain = pickle.load(f)
 
+            hinges_order = ['FRH', 'FRK', 'BLH', 'BLK', 'BRH', 'BRK', 'FLH', 'FLK']
+
             if isinstance(brain, BrainCpgNetworkStatic):
-                brain._output_mapping = [(i, h) for i, h in enumerate(hinges)]
+                # hinges[4:6], hinges[6:8] = hinges[6:8], hinges[4:6]
+                # print("[kgd-debug] randomized hinges in _output_mapping")
+                # random.Random(1).shuffle(hinges)
+                brain._output_mapping = [(i, hinge_names[h_name]) for i, h_name in enumerate(hinges_order)]
+                pprint.pprint([(i, h.name) for i, h in brain._output_mapping])
 
     brain = RobotControllerTrackerFactory(brain, hinges)
 
@@ -307,24 +374,46 @@ def main() -> None:
     
     For a concrete implementation look at the following example of mapping the robots`s hinges:
     """
-    h1, h2, h3, h4, h5, h6, h7, h8 = hinges
+    assert args.body == "spider"
     hinge_mapping = {
-        UUIDKey(h1): 0,
-        UUIDKey(h2): 1,
-        # UUIDKey(h3): 15,
-        # UUIDKey(h4): 14,
-        # UUIDKey(h5): 16,
-        # UUIDKey(h6): 17,
-        UUIDKey(h3): 16,
-        UUIDKey(h4): 17,
-        UUIDKey(h5): 15,
-        UUIDKey(h6): 14,
-        UUIDKey(h7): 31,
-        UUIDKey(h8): 30,
+        UUIDKey(hinge_names[name]): pin
+        for name, pin in [
+            # Verified mapping (not working?!? inverted?)
+            # ("FRH", 0), ("FRK", 1),
+            # ("BLH", 16), ("BLK", 17),
+            # ("FLH", 15), ("FLK", 14),
+            # ("BRH", 31), ("BRK", 30),
+
+            # Reverse mapping (to check)
+            # ("FRH", 16), ("FRK", 17),
+            # ("BLH", 0), ("BLK", 1),
+            # ("FLH", 31), ("FLK", 30),
+            # ("BRH", 15), ("BRK", 14),
+
+            # Has kind worked (but with a 90 rotation)
+            # ("FLH", 0), ("FLK", 1),
+            # ("BRH", 16), ("BRK", 17),
+            # ("FRH", 15), ("FRK", 14),
+            # ("BLH", 31), ("BLK", 30),
+
+            # Has kind of worked. A bit too much of a far-righter though.
+            # ("FLH", 31), ("FLK", 30),
+            # ("FRH", 0), ("FRK", 1),
+            # ("BRH", 15), ("BRK", 14),
+            # ("BLH", 16), ("BLK", 17),
+
+            # Tested with name hinges
+            ("FLH", 15), ("FLK", 14),
+            ("FRH", 0), ("FRK", 1),
+            ("BRH", 31), ("BRK", 30),
+            ("BLH", 16), ("BLK", 17),
+        ]
     }
 
     def on_prepared() -> None:
-        if debugging:
+        if args.reset:
+            print("Resetting hinges")
+        elif debugging:
             print("Ready to run. Doing so now")
         else:
             print("Done. Press enter to start the brain.")
@@ -339,16 +428,21 @@ def main() -> None:
     - initial_hinge_positions: Initial positions for the active hinges. In Revolve2 the simulator defaults to 0.0.
     - inverse_servos: Sometimes servos on the physical robot are mounted backwards by accident. Here you inverse specific servos in software. Example: {13: True} would inverse the servo connected to GPIO pin 13.
     """
+    if args.reset:
+        duration = 0
+    elif args.debug_hinge is not None:
+        duration = 5
+    elif args.debug_hinges:
+        duration = 5 * len(hinges)
+    else:
+        duration = args.duration
     config = Config(
         modular_robot=robot,
         hinge_mapping=hinge_mapping,
-        run_duration=args.duration,
+        run_duration=duration,
         control_frequency=20,
-        initial_hinge_positions={UUIDKey(active_hinge): 0.0 for active_hinge in hinges},
-        inverse_servos={
-            # hinge_mapping[UUIDKey(h)]: True
-            # for h in [h2, h4, h6, h8]
-        },
+        initial_hinge_positions={UUIDKey(h): 0.0 for h in hinges},
+        inverse_servos={},
     )
 
     """
@@ -370,6 +464,9 @@ def main() -> None:
     Note that theoretically if you want the robot to be self controlled and not dependant on a external remote, you can run this script on the robot locally.
     """
 
+    if args.reset or args.no_plots:
+        return
+
     print("Plotting")
     w, h = matplotlib.rcParams["figure.figsize"]
     fig, axes = plt.subplots(len(hinges), 2,
@@ -378,15 +475,37 @@ def main() -> None:
 
     plot_data = brain.plot_data
 
+    try:
+        simu_data: Optional[pd.DataFrame] = brain.brain.simu_data
+    except AttributeError:
+        simu_data = None
+
+    x = np.array(plot_data[0])
     for i in range(len(hinges)):
         for j in range(2):
             ax = axes[i][j]
             ix = 1 + j * len(hinges) + i
-            ax.plot(plot_data[0], plot_data[ix])
-            ax.set_title(brain.plot_header[ix])
+
+            art_hard, = ax.plot(x, plot_data[ix], zorder=1)
+            title = brain.plot_header[ix]
+
+            if simu_data is not None:
+                art_soft, = ax.plot(simu_data.index, simu_data.iloc[:, ix-1], zorder=-1)
+                title += " | " + simu_data.columns[ix-1]
+
+            ax.set_ylim(-1.2, 1.2)
+            # ax.set_xlim(-1, 16)
+
+            ax.set_title(title)
+
+    if simu_data is not None:
+        fig.legend(handles=[art_soft, art_hard], labels=["Simulation", "Real-world"], loc="upper center",
+                   ncols=2, title=time.ctime())
+
     fig.tight_layout()
-    fig.savefig("hinges.pdf")
+    fig.savefig("hinges.pdf", bbox_inches="tight")
 
 
 if __name__ == "__main__":
+    print("Start")
     main()

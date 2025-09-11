@@ -1,20 +1,11 @@
-import logging
-import logging
-import math
-from random import Random
-
 import numpy as np
 import torch
 from torch import nn
 
-from abrain import Genome, CPPN
-from apets.hack.body import compute_positions
-from apets.hack.config import Config
 from revolve2.modular_robot import ModularRobotControlInterface
 from revolve2.modular_robot.body.base import Body, ActiveHinge
 from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
-from revolve2.modular_robot.brain.cpg import BrainCpgNetworkNeighbor, BrainCpgInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 
 
