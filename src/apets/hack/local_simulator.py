@@ -297,7 +297,7 @@ class _Visualizer:
                 camera = backend.cam
 
             else:
-                self._paused = parameters.start_paused
+                self._paused = True#parameters.start_paused
                 self._step = False
 
                 def key_event(key):

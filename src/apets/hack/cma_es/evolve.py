@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 
 import cma
-import graphviz
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -17,8 +16,7 @@ from apets.hack.body import compute_positions
 from apets.hack.cma_es.env import Environment
 from apets.hack.evaluator import MoveForwardFitness
 from revolve2.modular_robot.body import Module
-from revolve2.modular_robot.body.base import ActiveHinge, Core, Brick, AttachmentFace
-from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2
+from revolve2.modular_robot.body.base import ActiveHinge, Core, AttachmentFace
 from revolve2.modular_robot.brain.cpg import (
     active_hinges_to_cpg_network_structure_neighbor,
 )
@@ -79,6 +77,8 @@ def bco(body_name, neighborhood):
     _s = cpg_network_structure
     # print(f"> {_s.num_cpgs=}, {_s.num_connections=}, {_s.num_states=}")
     # to_dot(modules_pos, active_hinges, cpg_network_structure, folder.joinpath(f"{body_name}-n{neighborhood}.png"))
+
+    pprint.pprint({m: ", ".join(f"{x:.2f}" for x in p) for m, p in modules_pos.items() if isinstance(m, ActiveHinge)})
 
     return body, cpg_network_structure, output_mapping
 
