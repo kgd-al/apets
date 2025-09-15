@@ -23,11 +23,22 @@ parser.add_argument("--purge", default=False, action="store_true", help="Purge o
 parser.add_argument("--synthesis", default=False, action="store_true", help="Only produce synthesis plots")
 args = parser.parse_args()
 
-fitness_mapping = dict(
-    kernels="RBFs",
-    lazy="Gymnasium",
-    speed="Speed"
-)
+# ==============================================================================
+
+training_curves_file = args.root.joinpath("training_curves.pdf")
+if not args.synthesis and (args.purge or not training_curves_file.exists()):
+    print("Hello")
+    print("Bye")
+    from tbparse import SummaryReader
+
+    log_dir = "<PATH_TO_EVENT_FILE_OR_DIRECTORY>"
+    reader = SummaryReader(log_dir)
+    df = reader.scalars
+    print(df)
+    exit(42)
+
+
+# ==============================================================================
 
 df_file = args.root.joinpath("summaries.csv")
 if args.purge and df_file.exists():
@@ -35,7 +46,6 @@ if args.purge and df_file.exists():
 
 if df_file.exists():
     df = pd.read_csv(df_file, index_col=0)
-    rewards = df.reward.unique().tolist()
 
 else:
     df = pd.concat(
@@ -67,8 +77,8 @@ else:
 
     df["avg_d_o"] = df.index.map(compute_d_o)
 
-    df["linearity"] = df["cX"] / df["dX"]
-    print(df[["cX", "dX", "linearity"]].to_string(max_rows=2000))
+    df["instability_avg"] = df[["avg_roll", "avg_pitch"]].abs().max(axis=1)
+    df["instability_std"] = df[["std_roll", "std_pitch"]].max(axis=1)
 
     df.loc[df.reward == "distance", "reward"] = "speed"
 
@@ -96,19 +106,32 @@ else:
 
     df.to_csv(df_file)
 
+# ==============================================================================
 
-df.rename(inplace=True, columns=dict(params="Parameters"))
-if args.synthesis:  # Make everything pretty!
-    pass
+col_mapping = {}
+groups = col_mapping["groups"] = "Groups"
+all_groups = col_mapping["detailed-groups"] = "Detailed groups"
+params = col_mapping["params"] = "Parameters"
+reward = col_mapping["reward"] = "Reward"
+normal_reward = col_mapping["normalized_reward"] = "Normalized Reward"
+kernels_reward = col_mapping["kernels"] = "Gaussians"
+lazy_reward = col_mapping["lazy"] = "Gym-Ant"
+speed_reward = col_mapping["speed"] = "Speed"
+instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
+instability_std = col_mapping["instability_std"] = "Instability (std)"
+df.rename(inplace=True, columns=col_mapping)
+
+df[reward] = df[reward].map(lambda x: col_mapping[x])
 
 
-def groups(_detailed): return "detailed-groups" if _detailed else "groups"
+def _groups(_detailed): return all_groups if _detailed else groups
 
 
-groups_hue_order = sorted(df.groups.unique().tolist())
-detailed_groups_hue_order = sorted(df["detailed-groups"].unique().tolist())
+groups_hue_order = sorted(df[groups].unique().tolist())
+detailed_groups_hue_order = sorted(df[all_groups].unique().tolist())
 
-rewards_hue_order = sorted(df["reward"].unique().tolist())
+rewards = df[reward].unique().tolist()
+rewards_hue_order = sorted(df[reward].unique().tolist())
 
 
 def hue_order(_detailed):
@@ -125,12 +148,14 @@ print(df)
 
 print()
 print("Bests")
-columns = ["reward", "arch", "neighborhood", "width", "depth", "kernels", "speed", "lazy", "groups", "detailed-groups"]
+columns = [reward, "arch", "neighborhood", "width", "depth",
+           kernels_reward, speed_reward, lazy_reward,
+           groups, all_groups]
 champs = df.loc[pd.concat(
-    df[df.reward == r].groupby("detailed-groups", dropna=False)[r].idxmax()
+    df[df[reward] == r].groupby(all_groups, dropna=False)[r].idxmax()
     for r in rewards
 )][columns]
-champs["SUM"] = champs["speed"] + champs["kernels"]
+champs["SUM"] = champs[speed_reward] + champs[kernels_reward]
 champs.sort_values(inplace=True, by="SUM", ascending=False)
 print(champs)
 print()
@@ -183,17 +208,17 @@ def _pareto(_points):
     return sorted(is_efficient, key=lambda i: math.atan2(_original_points[i][1], _original_points[i][0]))
 
 
-ss_pareto = _pareto(np.array([(a, b) for a, b in zip(df["speed"], df["kernels"])]))
+ss_pareto = _pareto(np.array([(a, b) for a, b in zip(df[speed_reward], df[kernels_reward])]))
 ss_pareto = df.iloc[ss_pareto][columns]
 
 print("Speed vs Stability pareto front")
 print(ss_pareto)
 print()
-print(ss_pareto.groupby(["reward"]).size())
+print(ss_pareto.groupby([reward]).size())
 print()
-print(ss_pareto.groupby(["detailed-groups"]).size())
+print(ss_pareto.groupby([all_groups]).size())
 print()
-print(ss_pareto.groupby(["reward", "detailed-groups"]).size())
+print(ss_pareto.groupby([reward, all_groups]).size())
 print()
 
 pareto_folder = args.root.joinpath("showcase").joinpath("pareto")
@@ -209,19 +234,22 @@ if not pareto_folder.exists():
 print("Performance vs energy pareto front")
 print()
 
-pe_pareto = df.iloc[_pareto(np.array([(a, b) for a, b in zip(1 - df["avg_d_o"], df["normalized_reward"])]))]
+pe_pareto = df.iloc[_pareto(np.array([(a, b) for a, b in
+                                      zip(1 - df["avg_d_o"], df[normal_reward])]))]
 print(pe_pareto[columns])
 
 print()
 print("Pareto front:")
 print()
-print(pe_pareto.groupby(["reward"]).size())
+print(pe_pareto.groupby([reward]).size())
 print()
-print(pe_pareto.groupby(["detailed-groups"]).size())
+print(pe_pareto.groupby([all_groups]).size())
 print()
-print(pe_pareto.groupby(["reward", "detailed-groups"]).size())
+print(pe_pareto.groupby([reward, all_groups]).size())
 print()
 
+
+# ==============================================================================
 
 trajectories_file = args.root.joinpath("trajectories.pdf")
 if not args.synthesis and (args.purge or not trajectories_file.exists()):
@@ -237,7 +265,7 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
             run = str(f.parent)
             data = df.loc[run, :]
             sns.lineplot(data=tdf, x="x", y="y", ax=ax,
-                         color=sns_cp[groups_hue_order.index(data["groups"])],
+                         color=sns_cp[groups_hue_order.index(data[groups])],
                          zorder=-tdf.x.iloc[-1], lw=.1)
 
             tdfs_trajs[run] = tdf
@@ -254,7 +282,7 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
         for r, tdf in tdfs_trajs.items():
             data = df.loc[r, :]
             sns.lineplot(data=tdf, x="x", y="y", ax=ax,
-                         color=sns_cp[rewards_hue_order.index(data["reward"])],
+                         color=sns_cp[rewards_hue_order.index(data[reward])],
                          zorder=-tdf.x.iloc[-1], lw=.1)
 
         ax.legend(handles=[
@@ -281,6 +309,7 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
         summary_pdf.savefig(fig, bbox_inches="tight")
         plt.close()
 
+# ==============================================================================
 
 def __key(*__args): return "_".join([str(x) for x in __args])
 
@@ -288,7 +317,7 @@ def __key(*__args): return "_".join([str(x) for x in __args])
 synthesis = defaultdict(list)
 synthesis.update({
     sns.relplot: [
-        __key("Parameters", r, False) for r in rewards
+        __key(params, r, False) for r in rewards
     ]
 })
 print(synthesis)
@@ -313,7 +342,7 @@ pdf_synthesis_file = args.root.joinpath("synthesis.pdf")
 print("Plotting...")
 sns.set_style("darkgrid")
 with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as synthesis_pdf:
-    # g = sns.scatterplot(df, x="Parameters", y="depth")
+    # g = sns.scatterplot(df, x=params, y="depth")
     # plt.xscale('log', base=10)
     # pdf.savefig(g.figure, bbox_inches="tight")
     # plt.close()
@@ -325,12 +354,12 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
 
     def relplot(x, y, base=10, **kwargs):
         _detailed = kwargs.pop("detailed", False)
-        if (_isS := kwargs.get("synthesis", None)) is None:
+        if (_isS := kwargs.pop("synthesis", None)) is None:
             _isS = is_synthesis(sns.relplot, (x, y, _detailed))
         if not args.synthesis or _isS:
             _args = dict(x=x, y=y,
-                         hue=groups(_detailed), hue_order=hue_order(_detailed),
-                         col="reward",
+                         hue=_groups(_detailed), hue_order=hue_order(_detailed),
+                         col=reward,
                          kind='line', marker='o',
                          err_style="bars", errorbar="ci", estimator="median")
 
@@ -348,15 +377,15 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
     for detailed in [False, True]:
         # Speed vs kernels + pareto front
 
-        isS = is_synthesis(sns.scatterplot, ("speed", "kernels", detailed))
+        isS = is_synthesis(sns.scatterplot, (speed_reward, kernels_reward, detailed))
         if not args.synthesis or isS:
             scatter_args = dict(
-                x="speed", y="kernels", style="reward",
-                hue=groups(detailed), hue_order=hue_order(detailed),
+                x=speed_reward, y=kernels_reward, style=reward,
+                hue=_groups(detailed), hue_order=hue_order(detailed),
             )
 
             g = sns.scatterplot(df, **scatter_args)
-            g.axes.plot(ss_pareto.speed, ss_pareto.kernels, **pareto_args)
+            g.axes.plot(ss_pareto[speed_reward], ss_pareto[kernels_reward], **pareto_args)
             sns.scatterplot(ss_pareto, **scatter_args, ax=g.axes, zorder=10, legend=False)
 
             g.axes.legend()
@@ -365,15 +394,15 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         # ===
         # = Energy vs performance + pareto front
 
-        isS = is_synthesis(sns.scatterplot, ("speed", "kernels", detailed))
+        isS = is_synthesis(sns.scatterplot, ("avg_d_o", normal_reward, detailed))
         if not args.synthesis or isS:
             scatter_args = dict(
-                x="avg_d_o", y="normalized_reward", style="reward",
-                hue=groups(detailed), hue_order=hue_order(detailed),
+                x="avg_d_o", y=normal_reward, style=reward,
+                hue=_groups(detailed), hue_order=hue_order(detailed),
             )
 
             g = sns.scatterplot(df, **scatter_args)
-            g.axes.plot(pe_pareto.avg_d_o, pe_pareto.normalized_reward, **pareto_args)
+            g.axes.plot(pe_pareto["avg_d_o"], pe_pareto[normal_reward], **pareto_args)
             sns.scatterplot(pe_pareto, **scatter_args, ax=g.axes, zorder=10, legend=False)
 
             g.legend().remove()
@@ -383,14 +412,15 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         # ====
 
         for k in rewards:
-            relplot(x="Parameters", y=k, detailed=detailed, synthesis=False)
-            relplot(x="Parameters", y=k, errorbar=("pi", 100),
+            relplot(x=params, y=k, detailed=detailed, synthesis=False)
+            relplot(x=params, y=k, errorbar=("pi", 100),
                     err_style="band", detailed=detailed, synthesis=False)
     print()
 
     tested_pairs = [
-        ((a, b), (c, d)) for ((a, b), (c, d)) in
-        itertools.combinations(itertools.product(df["groups"].unique(), df["reward"].unique()), r=2)
+        # ((a, b), (c, d)) for ((a, b), (c, d)) in
+        ((b, a), (d, c)) for ((a, b), (c, d)) in
+        itertools.combinations(itertools.product(df[groups].unique(), df[reward].unique()), r=2)
         if a == c or b == d
     ]
     tests = pd.DataFrame(index=tested_pairs, columns=[])
@@ -398,30 +428,35 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         print("Testing", len(tested_pairs), "pairs:", tested_pairs)
     annotator = None
 
-    relplot(x="Parameters", y="tps")
+    relplot(x=params, y="tps")
     # for c in ["avg_d_o", "Vx", "Vy", "Vz", "z", "dX", "dY", "cX", "cY"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
-    for c in rewards + ["linearity"] + [c for c in df.columns if ("avg" in c or "std" in c)]:
-        relplot(x="Parameters", y=c)
+    for c in rewards + [c for c in df.columns if ("avg" in c or "std" in c)]:
+        relplot(x=params, y=c)
 
         # ===
         isS = is_synthesis(sns.violinplot, (c,))
         if not args.synthesis or isS:
             violinplot_args = dict(
-                data=df, x="groups", y=c, hue="reward",
+                # data=df, x=groups, y=c, hue=reward,
+                data=df, x=reward, y=c, hue=groups,
                 inner="box", cut=0, gap=.25,
                 common_norm=True, density_norm="width"
             )
 
             ax = sns.violinplot(**violinplot_args)
 
-            print(c)
-            annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
-            annotator.configure(test="Mann-Whitney", verbose=2,
-                                hide_non_significant=True, text_format="simple",
-                                comparisons_correction="bonferroni")
-            _, corrected_results = annotator.apply_and_annotate()
-            tests[c] = [r.data.pvalue for r in corrected_results]
-            print()
+            # print(c)
+            # annotator = Annotator(ax=ax, pairs=tested_pairs, plot='violinplot', **violinplot_args)
+            # annotator.configure(test="Mann-Whitney", verbose=2,
+            #                     hide_non_significant=True, text_format="simple",
+            #                     comparisons_correction="bonferroni")
+            # _, corrected_results = annotator.apply_and_annotate()
+            # tests[c] = [r.data.pvalue for r in corrected_results]
+            # print()
+            maybe_save(ax, isS)
+
+            violinplot_args["x"], violinplot_args["hue"] = violinplot_args["hue"], violinplot_args["x"]
+            ax = sns.violinplot(**violinplot_args)
 
             maybe_save(ax, isS)
 
@@ -466,16 +501,17 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         except FileNotFoundError:
             return None
 
-    for df_name, base_df in [("all champions", champs)]:#, ("the pareto front", pareto)]:
-        df = pd.concat([_process(f) for f in base_df.index])
-        df.set_index(["Path", "m"], inplace=True)
+    if not args.synthesis:
+        for df_name, base_df in [("all champions", champs)]:#, ("the pareto front", pareto)]:
+            df = pd.concat([_process(f) for f in base_df.index])
+            df.set_index(["Path", "m"], inplace=True)
 
-        for label, value in [("Amplitude", "A"), ("Frequency", "f"), ("Phase", "p"), ("Offset", "c")]:
-            ax = sns.stripplot(df[df.Valid], x=value, y="m", hue="Path")
-            sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-            ax.set_title(f"{label} distributions per joint for {df_name}")
-            summary_pdf.savefig(ax.figure, bbox_inches="tight")
-            plt.close()
+            for label, value in [("Amplitude", "A"), ("Frequency", "f"), ("Phase", "p"), ("Offset", "c")]:
+                ax = sns.stripplot(df[df.Valid], x=value, y="m", hue="Path")
+                sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
+                ax.set_title(f"{label} distributions per joint for {df_name}")
+                summary_pdf.savefig(ax.figure, bbox_inches="tight")
+                plt.close()
 
 
 print("Generated", pdf_summary_file)
