@@ -1,6 +1,7 @@
 import dataclasses
 import os
 import pathlib
+import pprint
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from mujoco.viewer import Handle, launch, launch_passive
 from mujoco_viewer import MujocoViewer
 
 from revolve2.modular_robot_simulation import ModularRobotScene
+from revolve2.modular_robot_simulation._sensor_state_impl import ModularRobotSensorStateImpl
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.simulators.mujoco_simulator._abstraction_to_mujoco_mapping import AbstractionToMujocoMapping
 from revolve2.simulators.mujoco_simulator._control_interface_impl import ControlInterfaceImpl
@@ -117,12 +119,11 @@ class LocalSimulator:
                     exist_ok=self._parameters.record_settings.overwrite,
                 )
 
-            self._model, self._mapping = scene_to_model(
+            self._model, self._data, self._mapping = scene_to_model(
                 _scene, self._parameters.simulation_timestep,
                 cast_shadows=self._parameters.cast_shadows,
                 fast_sim=self._parameters.fast_sim,
             )
-            self._data = mujoco.MjData(self._model)
 
             self._control_interface = ControlInterfaceImpl(
                 data=self._data, abstraction_to_mujoco_mapping=self._mapping
@@ -162,6 +163,35 @@ class LocalSimulator:
                 camera_views={}  # TODO Missing cameras
             ),
             self._control_interface, self._parameters.control_step)
+
+        # ==========================
+        # = Debugging proprioception
+        # ==========================
+
+        body_to_multi_body_system_mapping = self._handler._brains[0][1]
+        sensor_state = ModularRobotSensorStateImpl(
+            simulation_state=SimulationStateImpl(
+                data=self._data,
+                abstraction_to_mujoco_mapping=self._mapping,
+                camera_views={}  # TODO Missing cameras
+            ),
+            body_to_multi_body_system_mapping=body_to_multi_body_system_mapping,
+        )
+
+        print("Mujoco data")
+        print(self._data.time, [x for x in self._data.qpos])
+        print(f"{'mbs1/pos + mbs1/quat':>25s} {self._data.body('mbs1/').xpos} {self._data.body('mbs1/').xquat}")
+        for i in range(self._model.njnt):
+            joint = self._data.joint(i)
+            print(f"{joint.name:>25s} {[x for x in joint.qpos]}")
+        print("Revolve proprioceptive data")
+        print(self._data.time, [
+            sensor_state.get_active_hinge_sensor_state(hinge._value).position
+            for hinge in body_to_multi_body_system_mapping.active_hinge_sensor_to_joint_hinge.keys()
+        ])
+        print()
+
+        # ==========================
 
         # Could diverge
         substeps = self._parameters.control_step / self._model.opt.timestep

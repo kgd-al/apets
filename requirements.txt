@@ -1,4 +1,5 @@
 absl-py==2.1.0
+attrs==25.3.0
 certifi==2024.12.14
 charset-normalizer==3.4.1
 cloudpickle==3.1.1
@@ -44,7 +45,9 @@ mujoco==2.3.7
 mujoco-python-viewer==0.1.4
 multineat==0.12
 multipledispatch==1.0.0
+natnet==0.1.0
 networkx==3.4.2
+new-natnet-client==4.1.2
 noise==1.2.2
 numpy==1.26.4
 nvidia-cublas-cu12==12.6.4.1
@@ -109,6 +112,7 @@ statannotations==0.7.2
 statsmodels==0.14.5
 StrEnum==0.4.15
 sympy==1.14.0
+tbparse==0.0.9
 tenacity==9.0.0
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2

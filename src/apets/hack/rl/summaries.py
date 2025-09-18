@@ -15,7 +15,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from pandas import Series
 from sklearn.preprocessing import StandardScaler
-from statannotations.Annotator import Annotator
+from tbparse import SummaryReader
 
 parser = argparse.ArgumentParser("Summarizes summary.csv files")
 parser.add_argument("root", type=Path)
@@ -28,13 +28,12 @@ args = parser.parse_args()
 training_curves_file = args.root.joinpath("training_curves.pdf")
 if not args.synthesis and (args.purge or not training_curves_file.exists()):
     print("Hello")
-    print("Bye")
-    from tbparse import SummaryReader
-
-    log_dir = "<PATH_TO_EVENT_FILE_OR_DIRECTORY>"
-    reader = SummaryReader(log_dir)
+    reader = SummaryReader(args.root, pivot=True, event_types={'scalars'})
     df = reader.scalars
+    print(df.columns)
     print(df)
+    # df = df.groupyby()
+    print("Bye")
     exit(42)
 
 

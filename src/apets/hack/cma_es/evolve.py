@@ -78,8 +78,6 @@ def bco(body_name, neighborhood):
     # print(f"> {_s.num_cpgs=}, {_s.num_connections=}, {_s.num_states=}")
     # to_dot(modules_pos, active_hinges, cpg_network_structure, folder.joinpath(f"{body_name}-n{neighborhood}.png"))
 
-    pprint.pprint({m: ", ".join(f"{x:.2f}" for x in p) for m, p in modules_pos.items() if isinstance(m, ActiveHinge)})
-
     return body, cpg_network_structure, output_mapping
 
 
@@ -183,6 +181,8 @@ def rerun(args):
         introspective=args.introspective,
 
         return_ff=True,
+
+        start_paused=True
     ))
     if args.movie:
         env_kwargs["record_settings"] = RecordSettings(

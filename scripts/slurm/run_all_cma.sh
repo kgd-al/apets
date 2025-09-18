@@ -19,7 +19,7 @@ prefix(){
 }
 
 (
-  for reward in ant #distance kernels
+  for reward in kernels distance lazy
   do
     for neighborhood in 0 2 4 6
     do

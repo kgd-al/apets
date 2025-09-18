@@ -283,6 +283,8 @@ class MoveFitness(SubTaskFitnessData):
                 a.length[0] for a in self.position_actuators(data)
             ]
 
+            # print("[kgd-debug]", self.position_actuators(data))
+
     def after_step(self, model: MjModel, data: MjData):
         dt = data.time - self.prev_time
 

@@ -25,7 +25,7 @@ def mlp_brain(body, depth, width, weights):
     body = modular_robots_v2.get(body)
     return TensorBrainFactory(
         body=body,
-        width=width, depth=depth, weights=weights
+        width=int(width), depth=int(depth), weights=weights
     )
 
 
