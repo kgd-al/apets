@@ -105,7 +105,7 @@ class GymSimulator(LocalSimulator, gym.Env):
         return self.observations(), reward, self.done, self._fitness_function.invalid, self.infos()
 
     def plot_trajectory(self):
-        return self.reward_function.plot_trajectory("R")
+        return self.reward_function.plot_trajectory(column="R")
 
     def plot_trajectory_as_image(self):
         try:

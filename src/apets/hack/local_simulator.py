@@ -164,35 +164,6 @@ class LocalSimulator:
             ),
             self._control_interface, self._parameters.control_step)
 
-        # ==========================
-        # = Debugging proprioception
-        # ==========================
-
-        body_to_multi_body_system_mapping = self._handler._brains[0][1]
-        sensor_state = ModularRobotSensorStateImpl(
-            simulation_state=SimulationStateImpl(
-                data=self._data,
-                abstraction_to_mujoco_mapping=self._mapping,
-                camera_views={}  # TODO Missing cameras
-            ),
-            body_to_multi_body_system_mapping=body_to_multi_body_system_mapping,
-        )
-
-        print("Mujoco data")
-        print(self._data.time, [x for x in self._data.qpos])
-        print(f"{'mbs1/pos + mbs1/quat':>25s} {self._data.body('mbs1/').xpos} {self._data.body('mbs1/').xquat}")
-        for i in range(self._model.njnt):
-            joint = self._data.joint(i)
-            print(f"{joint.name:>25s} {[x for x in joint.qpos]}")
-        print("Revolve proprioceptive data")
-        print(self._data.time, [
-            sensor_state.get_active_hinge_sensor_state(hinge._value).position
-            for hinge in body_to_multi_body_system_mapping.active_hinge_sensor_to_joint_hinge.keys()
-        ])
-        print()
-
-        # ==========================
-
         # Could diverge
         substeps = self._parameters.control_step / self._model.opt.timestep
         assert substeps == round(substeps)

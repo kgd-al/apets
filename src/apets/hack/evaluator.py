@@ -474,13 +474,15 @@ class MoveFitness(SubTaskFitnessData):
         args["rgba"] = [1, 0, 0, .5]
         add_marker(**args)
 
+    def _get_trajectory_data(self):
+        if (d := getattr(self, "_prev_log_data", None)) is not None:
+            return d
+        else:
+            return self._data_trajectory
+
     def do_plots(self, path: Path):
         with PdfPages(path.joinpath("trajectory.pdf")) as pdf:
-            if (d := getattr(self, "_prev_log_data", None)) is not None:
-                trajectory_data = d
-            else:
-                trajectory_data = self._data_trajectory
-
+            trajectory_data = self._get_trajectory_data()
             pdf.savefig(self.plot_trajectory(trajectory_data, "r"))
             pdf.savefig(self.plot_trajectory(trajectory_data, "R"))
 
@@ -501,8 +503,9 @@ class MoveFitness(SubTaskFitnessData):
                 self._bricks_data.to_csv(path.joinpath("bricks_data.csv"))
         plt.close("all")
 
-    @staticmethod
-    def plot_trajectory(data, column="R"):
+    def plot_trajectory(self, data=None, column="R"):
+        if data is None:
+            data = self._get_trajectory_data()
         matplotlib.use("agg")
         fig, ax = plt.subplots()
         plot_multicolor(fig, ax, data.y, data.x, data[column])
