@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import numpy as np
@@ -11,6 +12,9 @@ from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 from revolve2.modular_robot_physical import UUIDKey
+
+
+SINBRAIN = True
 
 
 def mlp_structure(hinges: int, width: int, depth: int) -> nn.Sequential:
@@ -80,6 +84,18 @@ class TensorBrain(BrainInstance):
 
         state = self._get_observation(sensor_state)
         action = self._modules(torch.tensor(state)).detach().numpy()
+
+        # if SINBRAIN:
+        #     if self._time < .5:
+        #         action = [0, 1, 0, 1, 0, 1, 0, 1]
+        #     else:
+        #         def _sin(_p): return math.sin(.25 * 2 * math.pi * (self._time + _p))
+        #         action = [
+        #             _sin(0), _sin(0),
+        #             _sin(.5), _sin(.5),
+        #             _sin(.25), _sin(.25),
+        #             _sin(.75), _sin(.75),
+        #         ]
 
         # print([h.name for h in self._hinges])
         # print(self._time, [" ".join(f"{x:.2g}" for x in a) for a in [np.array(state), action * 1.047197551]])

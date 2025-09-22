@@ -31,7 +31,7 @@ duration=${SLURM_DURATION:-10:00:00}
 threads=${THREADS:-8}
 partition=${SLURM_PARTITION:-batch}
 
-printf "Running $name[$seeds] on partition $partition with $threads threads for $duration -> "
+printf "Running rl/$name[$seeds] on partition $partition with $threads threads for $duration -> "
 
 sbatch -o "$slurm_logs_base.out" -e "$slurm_logs_base.err" <<EOF
 #!/bin/bash
