@@ -66,20 +66,24 @@ else:
 
     df = df[~df.index.map(lambda _s: any(__s in _s for __s in invalid_runs))]
 
-    df["|avg_y|"] = df["avg_y"].abs()
+    try:
+        df["|avg_y|"] = df["avg_y"].abs()
 
-    def compute_d_o(_path):
-        try:
-            _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
-            _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
-            return (_df.iloc[1:].reset_index(drop=True) - _df.iloc[:-1]).abs().mean().mean()
-        except FileNotFoundError:
-            return np.nan
+        def compute_d_o(_path):
+            try:
+                _df = pd.read_csv(Path(_path).joinpath("joints_data.csv"))
+                _df = _df[[c for c in _df.columns if c[-5:] == "-ctrl"]]
+                return (_df.iloc[1:].reset_index(drop=True) - _df.iloc[:-1]).abs().mean().mean()
+            except FileNotFoundError:
+                return np.nan
 
-    df["avg_d_o"] = df.index.map(compute_d_o)
+        df["avg_d_o"] = df.index.map(compute_d_o)
 
-    df["instability_avg"] = df[["avg_roll", "avg_pitch"]].abs().max(axis=1)
-    df["instability_std"] = df[["std_roll", "std_pitch"]].max(axis=1)
+        df["instability_avg"] = df[["avg_roll", "avg_pitch"]].abs().max(axis=1)
+        df["instability_std"] = df[["std_roll", "std_pitch"]].max(axis=1)
+        
+    except Exception as e:
+        print("Ignoring mild error", e)
 
     df.loc[df.reward == "distance", "reward"] = "speed"
 
@@ -109,20 +113,31 @@ else:
 
 # ==============================================================================
 
-col_mapping = {}
-groups = col_mapping["groups"] = "Groups"
-all_groups = col_mapping["detailed-groups"] = "Detailed groups"
-params = col_mapping["params"] = "Parameters"
-reward = col_mapping["reward"] = "Reward"
-normal_reward = col_mapping["normalized_reward"] = "Normalized Reward"
-kernels_reward = col_mapping["kernels"] = "Gaussians"
-lazy_reward = col_mapping["lazy"] = "Gym-Ant"
-speed_reward = col_mapping["speed"] = "Speed"
-instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
-instability_std = col_mapping["instability_std"] = "Instability (std)"
-df.rename(inplace=True, columns=col_mapping)
+# col_mapping = {}
+# groups = col_mapping["groups"] = "Groups"
+# all_groups = col_mapping["detailed-groups"] = "Detailed groups"
+# params = col_mapping["params"] = "Parameters"
+# reward = col_mapping["reward"] = "Reward"
+# normal_reward = col_mapping["normalized_reward"] = "Normalized Reward"
+# kernels_reward = col_mapping["kernels"] = "Gaussians"
+# lazy_reward = col_mapping["lazy"] = "Gym-Ant"
+# speed_reward = col_mapping["speed"] = "Speed"
+# instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
+# instability_std = col_mapping["instability_std"] = "Instability (std)"
+# df.rename(inplace=True, columns=col_mapping)
+#
+# df[reward] = df[reward].map(lambda x: col_mapping[x])
 
-df[reward] = df[reward].map(lambda x: col_mapping[x])
+groups = "groups"
+all_groups = "detailed-groups"
+params = "params"
+reward = "reward"
+normal_reward = "normalized_reward"
+kernels_reward = "kernels"
+lazy_reward = "lazy"
+speed_reward = "speed"
+instability_avg = "instability_avg"
+instability_std = "instability_std"
 
 
 def _groups(_detailed): return all_groups if _detailed else groups

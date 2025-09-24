@@ -26,7 +26,7 @@ prefix(){
       echo $reward/cpg-$neighborhood $seeds --reward $reward --arch cpg --neighborhood $neighborhood $@
     done
   done
-  for reward in ant #distance kernels
+  for reward in kernels distance lazy
   do
     echo $reward/mlp-0-0 $seeds --reward $reward --arch mlp --depth 0 --width 0 $@
     for depth in 1 2
