@@ -17,6 +17,8 @@ from pandas import Series
 from sklearn.preprocessing import StandardScaler
 from tbparse import SummaryReader
 
+from apets.hack.hardware import extract_controller
+
 parser = argparse.ArgumentParser("Summarizes summary.csv files")
 parser.add_argument("root", type=Path)
 parser.add_argument("--purge", default=False, action="store_true", help="Purge old showcased files")
@@ -26,7 +28,7 @@ args = parser.parse_args()
 # ==============================================================================
 
 training_curves_file = args.root.joinpath("training_curves.pdf")
-if not args.synthesis and (args.purge or not training_curves_file.exists()):
+if False and not args.synthesis and (args.purge or not training_curves_file.exists()):
     print("Hello")
     reader = SummaryReader(args.root, pivot=True, event_types={'scalars'})
     df = reader.scalars
@@ -39,6 +41,7 @@ if not args.synthesis and (args.purge or not training_curves_file.exists()):
 
 # ==============================================================================
 
+str_root = str(args.root)
 df_file = args.root.joinpath("summaries.csv")
 if args.purge and df_file.exists():
     df_file.unlink()
@@ -52,7 +55,6 @@ else:
         for f in args.root.glob("**/summary.csv")
     )
 
-    str_root = str(args.root)
     df.index = df.index.map(lambda _p: _p.replace("/home/kgd/data", str_root))
 
     invalid_runs = [
@@ -145,36 +147,11 @@ print(df)
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
 # print()
 
-print()
-print("Bests")
-columns = [reward, "arch", "neighborhood", "width", "depth",
-           kernels_reward, speed_reward, lazy_reward,
-           groups, all_groups]
-champs = df.loc[pd.concat(
-    df[df[reward] == r].groupby(all_groups, dropna=False)[r].idxmax()
-    for r in rewards
-)][columns]
-champs["SUM"] = champs[speed_reward] + champs[kernels_reward]
-champs.sort_values(inplace=True, by="SUM", ascending=False)
-print(champs)
-print()
-
-
-# for c in champs.index:
-#     c = Path(c)
-#     b = pd.read_csv(c.joinpath("bricks_data.csv"))
-#     fig, ax = plt.subplots()
-#     for col in [b for b in b.columns if len(b.split("_")) == 4]:
-#         ax.plot(b.t, b[col], label=col)
-#     ax.legend()
-#     fig.savefig(c.joinpath("steps.pdf"), bbox_inches="tight")
-#     fig.savefig(c.joinpath("steps.png"), bbox_inches="tight")
-#     plt.close()
-
 
 def showcase(_p, _out):
-    def cp(_src):
-        _dst = _out.joinpath(Path(str(_src.parent).replace(str_root + "/", "").replace("/", "_")).with_suffix(_src.suffix))
+    def cp(_src, _suffix=None):
+        _suffix = _suffix or _src.suffix
+        _dst = _out.joinpath(Path(str(_src.parent).replace(str_root + "/", "").replace("/", "_")).with_suffix(_suffix))
         print(_src, "->", _dst)
         shutil.copyfile(_src, _dst)
 
@@ -182,15 +159,44 @@ def showcase(_p, _out):
     cp(_p.joinpath("movie.mp4"))
     cp(_p.joinpath("trajectory.pdf"))
 
+    try:
+        if "cma" in _p.parts:
+            archive = _p.joinpath("cma-es.pkl")
+        elif "rlearn" in _p.parts:
+            archive = _p.joinpath("model.zip")
+        else:
+            raise RuntimeError
+        controller_file = extract_controller.main(argparse.Namespace(
+            body="spider", quiet=2, file=archive
+        ))
+        cp(controller_file, _suffix=".revolve_controller.pkl")
+    except Exception as e:
+        print(f"\033[90mSkipping failed auto-extract for {_p}: {e}\033[0m")
 
-best_folder = args.root.joinpath("showcase").joinpath("bests")
-if args.purge:
-    shutil.rmtree(best_folder, ignore_errors=True)
-if not best_folder.exists():
-    best_folder.mkdir(parents=True)
-    for p in champs.index:
-        showcase(p, best_folder)
+
+for _g, _name in [(groups, []), (all_groups, ["detailed"])]:
     print()
+    print(" ".join(["Bests"] + [f"({_x})" for _x in _name]))
+    columns = [reward, "arch", "neighborhood", "width", "depth",
+               kernels_reward, speed_reward, lazy_reward,
+               groups, all_groups]
+    champs = df.loc[pd.concat(
+        df[df[reward] == r].groupby(_g, dropna=False)[r].idxmax()
+        for r in rewards
+    )][columns]
+    champs["SUM"] = champs[speed_reward] + champs[kernels_reward]
+    champs.sort_values(inplace=True, by="SUM", ascending=False)
+    print(champs)
+    print()
+
+    best_folder = args.root.joinpath("showcase").joinpath("_".join(["bests"]+_name))
+    if args.purge:
+        shutil.rmtree(best_folder, ignore_errors=True)
+    if not best_folder.exists():
+        best_folder.mkdir(parents=True)
+        for p in champs.index:
+            showcase(p, best_folder)
+        print()
 
 
 def _pareto(_points):
@@ -245,6 +251,24 @@ print()
 print(pe_pareto.groupby([all_groups]).size())
 print()
 print(pe_pareto.groupby([reward, all_groups]).size())
+print()
+
+
+print("Elevation vs jumpiness pareto front")
+print()
+
+zz_pareto = df.iloc[_pareto(np.array([(a, b) for a, b in
+                                      zip(df["avg_z"], 1 - df["std_z"])]))]
+print(zz_pareto[columns])
+
+print()
+print("Pareto front:")
+print()
+print(zz_pareto.groupby([reward]).size())
+print()
+print(zz_pareto.groupby([all_groups]).size())
+print()
+print(zz_pareto.groupby([reward, all_groups]).size())
 print()
 
 
@@ -310,6 +334,7 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
 
 # ==============================================================================
 
+
 def __key(*__args): return "_".join([str(x) for x in __args])
 
 
@@ -334,7 +359,6 @@ def maybe_save(_g, _is_synthesis):
     if _is_synthesis:
         synthesis_pdf.savefig(_g.figure, bbox_inches="tight")
     plt.close()
-
 
 pdf_summary_file = args.root.joinpath("summary.pdf")
 pdf_synthesis_file = args.root.joinpath("synthesis.pdf")
@@ -379,7 +403,8 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         isS = is_synthesis(sns.scatterplot, (speed_reward, kernels_reward, detailed))
         if not args.synthesis or isS:
             scatter_args = dict(
-                x=speed_reward, y=kernels_reward, style=reward,
+                x=speed_reward, y=kernels_reward,
+                style=reward, style_order=rewards_hue_order,
                 hue=_groups(detailed), hue_order=hue_order(detailed),
             )
 
@@ -391,12 +416,12 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
             maybe_save(g, isS)
 
         # ===
-        # = Energy vs performance + pareto front
 
         isS = is_synthesis(sns.scatterplot, ("avg_d_o", normal_reward, detailed))
         if not args.synthesis or isS:
             scatter_args = dict(
-                x="avg_d_o", y=normal_reward, style=reward,
+                x="avg_d_o", y=normal_reward,
+                style=reward, style_order=rewards_hue_order,
                 hue=_groups(detailed), hue_order=hue_order(detailed),
             )
 
@@ -407,6 +432,28 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
             g.legend().remove()
             g.figure.legend(loc='outside right')
             maybe_save(g, isS)
+
+        # ====
+
+        for x, y, pareto_df in [
+            # Speed vs kernels + pareto front
+            (speed_reward, kernels_reward, ss_pareto),
+            # = Energy vs performance + pareto front
+            ("avg_d_o", normal_reward, pe_pareto),
+            # = Elevation vs jumpiness + pareto front
+            ("avg_z", "std_z", zz_pareto),
+        ]:
+            isS = is_synthesis(sns.scatterplot, (x, y, detailed))
+            if not args.synthesis or isS:
+                scatter_args["x"], scatter_args["y"] = x, y
+
+                g = sns.scatterplot(df, **scatter_args)
+                g.axes.plot(pareto_df[x], pareto_df[y], **pareto_args)
+                sns.scatterplot(pareto_df, **scatter_args, ax=g.axes, zorder=10, legend=False)
+
+                g.legend().remove()
+                g.figure.legend(loc='outside right')
+                maybe_save(g, isS)
 
         # ====
 

@@ -411,7 +411,7 @@ def main() -> None:
             print("Done. Press enter to start the brain.")
             _in = input()
             print(_in, len(_in))
-            if len(_in) > 0:
+            if _in[:2].lower() != "go" and len(_in) > 0:
                 print("Exiting.")
                 exit(2)
 
@@ -465,16 +465,15 @@ def main() -> None:
 
     print("Plotting")
 
-    filename = os.environ.get("PLOT_NAME", "hinges")
+    filename = Path(os.environ.get("PLOT_NAME", Path(args.brain).with_suffix("") or "hinges"))
     plot_data = brain.plot_data
 
-    pd.DataFrame({header: data for header, data in zip(brain.plot_header, plot_data)}).set_index("time").to_csv(filename + ".csv")
+    pd.DataFrame({header: data for header, data in zip(brain.plot_header, plot_data)}).set_index("time").to_csv(filename.with_suffix(".csv"))
 
     w, h = matplotlib.rcParams["figure.figsize"]
     fig, axes = plt.subplots(len(hinges), 2,
                              sharex=True, sharey=True,
                              figsize=(3 * w, 2 * h))
-
 
     try:
         simu_data: Optional[pd.DataFrame] = brain.brain_factory.simu_data
@@ -504,7 +503,7 @@ def main() -> None:
                    ncols=2, title=time.ctime())
 
     fig.tight_layout()
-    fig.savefig(filename + ".pdf", bbox_inches="tight")
+    fig.savefig(filename.with_suffix(".pdf"), bbox_inches="tight")
 
 
 if __name__ == "__main__":

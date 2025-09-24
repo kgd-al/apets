@@ -34,10 +34,11 @@ do
 #  echo $f >&2
   if [ $trainer == "rlearn" ]
   then
-    echo src/apets/hack/rl/train.py --rerun $folder/model.zip \
+    echo src/apets/hack/rl/train.py --rerun $folder/best_model.zip \
       --rotated --reward $reward $depth $width --seed $seed --headless -T $duration \
       --introspective
   else
+    continue
     echo src/apets/hack/cma_es/evolve.py -o $folder --arch $nn --reward $reward \
       --rerun $depth $width $neighborhood --rotated --headless -T $duration --seed $seed \
       --introspective

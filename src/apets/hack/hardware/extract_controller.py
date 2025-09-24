@@ -29,23 +29,14 @@ def mlp_brain(body, depth, width, weights):
     )
 
 
-def main():
-    parser = argparse.ArgumentParser("Extracts mlp or cpg controller from"
-                                     " cma-es archive or stable-baselines3"
-                                     " model")
-    parser.add_argument("file", type=Path,
-                        help="path to the file to process")
-    parser.add_argument("--body", choices=["spider"],
-                        help="robot morphology", required=True)
-
-    args = parser.parse_args()
-
+def main(args):
     file = args.file.name
     if file == "cma-es.pkl":
         brain = extract_cma(args)
 
     elif file == "model.zip":
-        print("Extracting mlp controller from stable-baselines3")
+        if not args.quiet:
+            print("Extracting mlp controller from stable-baselines3")
         brain = extract_sb3(args)
 
     else:
@@ -59,23 +50,29 @@ def main():
     with open(out_file, "wb") as f:
         pickle.dump(brain, f)
 
-    print("Saved revolve controller to", out_file, end='')
-    if "joints_df" in locals():
-        print(" (with simulated-ground-truth data)")
-    print()
+    if args.quiet < 2:
+        print("Saved revolve controller to", out_file, end='')
+        if "joints_df" in locals():
+            print(" (with simulated-ground-truth data)")
+        print()
+
+    return out_file
 
 
 def extract_cma(args):
     trainer, reward, arch, run, _ = args.file.parts[-5:]
     assert trainer == "cma"
     arch, *arch_params = arch.split("-")
-    print(arch, arch_params)
-    print(f"Extracting {arch} controller from cma-es")
+    if not args.quiet:
+        print(arch, arch_params)
+        print(f"Extracting {arch} controller from cma-es")
     with open(args.file, "rb") as f:
         es = pickle.loads(f.read())
 
         weights = es.result.xbest
-        print(weights)
+        if not args.quiet:
+            print(weights)
+
         if arch == "cpg":
             neighborhood = int(arch_params[0])
             brain = cpg_brain(es.result.xbest, args.body, neighborhood)
@@ -88,4 +85,17 @@ def extract_cma(args):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser("Extracts mlp or cpg controller from"
+                                     " cma-es archive or stable-baselines3"
+                                     " model")
+    parser.add_argument("file", type=Path,
+                        help="path to the file to process")
+    parser.add_argument("--body", choices=["spider"],
+                        help="robot morphology", required=True)
+    parser.add_argument("--quiet", "-q",
+                        default=0, action="count",
+                        help="I'll be quiet, sure")
+
+    args = parser.parse_args()
+
+    main(args)
