@@ -5,6 +5,7 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -17,6 +18,7 @@ from pandas import Series
 from sklearn.preprocessing import StandardScaler
 from tbparse import SummaryReader
 
+matplotlib.use("agg")
 from apets.hack.hardware import extract_controller
 
 parser = argparse.ArgumentParser("Summarizes summary.csv files")
@@ -28,15 +30,23 @@ args = parser.parse_args()
 # ==============================================================================
 
 training_curves_file = args.root.joinpath("training_curves.pdf")
-if False and not args.synthesis and (args.purge or not training_curves_file.exists()):
+if True and not args.synthesis and (args.purge or not training_curves_file.exists()):
     print("Hello")
-    reader = SummaryReader(args.root, pivot=True, event_types={'scalars'})
-    df = reader.scalars
-    print(df.columns)
-    print(df)
+    # reader = SummaryReader(args.root, pivot=True, event_types={'scalars'})
+    # df = reader.scalars
+    for f in args.root.glob("**/run-*"):
+        training_curve = f.joinpath("_progress.csv")
+        if args.purge or not training_curve.exists():
+            if len(event_files := list(f.glob("events.out.*"))) > 0:
+                file = event_files[0]
+                print(file)
+
+            elif (file := f.joinpath("xrecentbest.dat")).exists():
+                print(file)
+
     # df = df.groupyby()
     print("Bye")
-    exit(42)
+exit(42)
 
 
 # ==============================================================================
@@ -45,6 +55,10 @@ str_root = str(args.root)
 df_file = args.root.joinpath("summaries.csv")
 if args.purge and df_file.exists():
     df_file.unlink()
+
+showcase_folder = args.root.joinpath("showcase")
+if args.purge and showcase_folder.exists():
+    shutil.rmtree(showcase_folder)
 
 if df_file.exists():
     df = pd.read_csv(df_file, index_col=0)
@@ -113,31 +127,33 @@ else:
 
 # ==============================================================================
 
-# col_mapping = {}
-# groups = col_mapping["groups"] = "Groups"
-# all_groups = col_mapping["detailed-groups"] = "Detailed groups"
-# params = col_mapping["params"] = "Parameters"
-# reward = col_mapping["reward"] = "Reward"
-# normal_reward = col_mapping["normalized_reward"] = "Normalized Reward"
-# kernels_reward = col_mapping["kernels"] = "Gaussians"
-# lazy_reward = col_mapping["lazy"] = "Gym-Ant"
-# speed_reward = col_mapping["speed"] = "Speed"
-# instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
-# instability_std = col_mapping["instability_std"] = "Instability (std)"
-# df.rename(inplace=True, columns=col_mapping)
-#
-# df[reward] = df[reward].map(lambda x: col_mapping[x])
+if True:
+    col_mapping = {}
+    groups = col_mapping["groups"] = "Groups"
+    all_groups = col_mapping["detailed-groups"] = "Detailed groups"
+    params = col_mapping["params"] = "Parameters"
+    reward = col_mapping["reward"] = "Reward"
+    normal_reward = col_mapping["normalized_reward"] = "Normalized Reward"
+    kernels_reward = col_mapping["kernels"] = "Gaussians"
+    lazy_reward = col_mapping["lazy"] = "Gym-Ant"
+    speed_reward = col_mapping["speed"] = "Speed"
+    instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
+    instability_std = col_mapping["instability_std"] = "Instability (std)"
+    df.rename(inplace=True, columns=col_mapping)
 
-groups = "groups"
-all_groups = "detailed-groups"
-params = "params"
-reward = "reward"
-normal_reward = "normalized_reward"
-kernels_reward = "kernels"
-lazy_reward = "lazy"
-speed_reward = "speed"
-instability_avg = "instability_avg"
-instability_std = "instability_std"
+    df[reward] = df[reward].map(lambda x: col_mapping[x])
+
+else:
+    groups = "groups"
+    all_groups = "detailed-groups"
+    params = "params"
+    reward = "reward"
+    normal_reward = "normalized_reward"
+    kernels_reward = "kernels"
+    lazy_reward = "lazy"
+    speed_reward = "speed"
+    instability_avg = "instability_avg"
+    instability_std = "instability_std"
 
 
 def _groups(_detailed): return all_groups if _detailed else groups
@@ -163,10 +179,13 @@ print(df)
 # print()
 
 
-def showcase(_p, _out):
+def showcase(_p, _out, _prefix=None):
     def cp(_src, _suffix=None):
         _suffix = _suffix or _src.suffix
-        _dst = _out.joinpath(Path(str(_src.parent).replace(str_root + "/", "").replace("/", "_")).with_suffix(_suffix))
+        _basename = str(_src.parent).replace(str_root + "/", "").replace("/", "_")
+        if _prefix is not None:
+            _basename = _prefix + "_" + _basename
+        _dst = _out.joinpath(Path(_basename).with_suffix(_suffix))
         print(_src, "->", _dst)
         shutil.copyfile(_src, _dst)
 
@@ -204,7 +223,7 @@ for _g, _name in [(groups, []), (all_groups, ["detailed"])]:
     print(champs)
     print()
 
-    best_folder = args.root.joinpath("showcase").joinpath("_".join(["bests"]+_name))
+    best_folder = showcase_folder.joinpath("_".join(["bests"]+_name))
     if args.purge:
         shutil.rmtree(best_folder, ignore_errors=True)
     if not best_folder.exists():
@@ -228,6 +247,19 @@ def _pareto(_points):
     return sorted(is_efficient, key=lambda i: math.atan2(_original_points[i][1], _original_points[i][0]))
 
 
+def _showcase_pareto(__pareto_front, __name):
+    __folder = args.root.joinpath("showcase").joinpath("pareto").joinpath(__name)
+    if args.purge:
+        shutil.rmtree(__folder, ignore_errors=True)
+    if not __folder.exists():
+        __folder.mkdir(parents=True)
+        _n = len(__pareto_front)
+        _digits = math.ceil(math.log10(_n))
+        for i, __p in enumerate(__pareto_front.index):
+            showcase(__p, __folder, f"{i:0{_digits}d}")
+        print()
+
+
 ss_pareto = _pareto(np.array([(a, b) for a, b in zip(df[speed_reward], df[kernels_reward])]))
 ss_pareto = df.iloc[ss_pareto][columns]
 
@@ -240,15 +272,7 @@ print(ss_pareto.groupby([all_groups]).size())
 print()
 print(ss_pareto.groupby([reward, all_groups]).size())
 print()
-
-pareto_folder = args.root.joinpath("showcase").joinpath("pareto")
-if args.purge:
-    shutil.rmtree(pareto_folder, ignore_errors=True)
-if not pareto_folder.exists():
-    pareto_folder.mkdir(parents=True)
-    for p in ss_pareto.index:
-        showcase(p, pareto_folder)
-    print()
+_showcase_pareto(ss_pareto, "speed_stability")
 
 
 print("Performance vs energy pareto front")
@@ -267,6 +291,7 @@ print(pe_pareto.groupby([all_groups]).size())
 print()
 print(pe_pareto.groupby([reward, all_groups]).size())
 print()
+_showcase_pareto(pe_pareto, "performance_energy")
 
 
 print("Elevation vs jumpiness pareto front")
@@ -285,6 +310,7 @@ print(zz_pareto.groupby([all_groups]).size())
 print()
 print(zz_pareto.groupby([reward, all_groups]).size())
 print()
+_showcase_pareto(zz_pareto, "height_jumpiness")
 
 
 # ==============================================================================
@@ -413,42 +439,10 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
     )
 
     for detailed in [False, True]:
-        # Speed vs kernels + pareto front
-
-        isS = is_synthesis(sns.scatterplot, (speed_reward, kernels_reward, detailed))
-        if not args.synthesis or isS:
-            scatter_args = dict(
-                x=speed_reward, y=kernels_reward,
-                style=reward, style_order=rewards_hue_order,
-                hue=_groups(detailed), hue_order=hue_order(detailed),
-            )
-
-            g = sns.scatterplot(df, **scatter_args)
-            g.axes.plot(ss_pareto[speed_reward], ss_pareto[kernels_reward], **pareto_args)
-            sns.scatterplot(ss_pareto, **scatter_args, ax=g.axes, zorder=10, legend=False)
-
-            g.axes.legend()
-            maybe_save(g, isS)
-
-        # ===
-
-        isS = is_synthesis(sns.scatterplot, ("avg_d_o", normal_reward, detailed))
-        if not args.synthesis or isS:
-            scatter_args = dict(
-                x="avg_d_o", y=normal_reward,
-                style=reward, style_order=rewards_hue_order,
-                hue=_groups(detailed), hue_order=hue_order(detailed),
-            )
-
-            g = sns.scatterplot(df, **scatter_args)
-            g.axes.plot(pe_pareto["avg_d_o"], pe_pareto[normal_reward], **pareto_args)
-            sns.scatterplot(pe_pareto, **scatter_args, ax=g.axes, zorder=10, legend=False)
-
-            g.legend().remove()
-            g.figure.legend(loc='outside right')
-            maybe_save(g, isS)
-
-        # ====
+        scatter_args = dict(
+            style=reward, style_order=rewards_hue_order,
+            hue=_groups(detailed), hue_order=hue_order(detailed),
+        )
 
         for x, y, pareto_df in [
             # Speed vs kernels + pareto front
