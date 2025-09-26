@@ -32,17 +32,23 @@ args = parser.parse_args()
 training_curves_file = args.root.joinpath("training_curves.pdf")
 if True and not args.synthesis and (args.purge or not training_curves_file.exists()):
     print("Hello")
-    # reader = SummaryReader(args.root, pivot=True, event_types={'scalars'})
-    # df = reader.scalars
     for f in args.root.glob("**/run-*"):
         training_curve = f.joinpath("_progress.csv")
         if args.purge or not training_curve.exists():
-            if len(event_files := list(f.glob("events.out.*"))) > 0:
-                file = event_files[0]
-                print(file)
+            if (file := f.joinpath("progress.csv")).exists():
+                sub_df = pd.read_csv(file, index_col=0, usecols=[2, 17]).dropna()
+                # sub_df = pd.read_csv(file, index_col=0)
+                print(sub_df.columns)
+                print(sub_df)
+                exit(43)
 
             elif (file := f.joinpath("xrecentbest.dat")).exists():
                 print(file)
+                sub_df = pd.read_csv(file, sep=' ', usecols=[2, 5])#.dropna()
+                sub_df = pd.read_csv(file, sep=' ')
+                print(sub_df.columns)
+                print(sub_df)
+                exit(44)
 
     # df = df.groupyby()
     print("Bye")
