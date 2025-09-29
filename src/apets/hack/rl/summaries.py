@@ -44,15 +44,21 @@ if True and not args.synthesis and (args.purge or not training_curves_file.exist
 
             elif (file := f.joinpath("xrecentbest.dat")).exists():
                 print(file)
-                sub_df = pd.read_csv(file, sep=' ', usecols=[2, 5])#.dropna()
-                sub_df = pd.read_csv(file, sep=' ')
+                header = open(file).readline()
+                headers = header[header.find('"')+1: header.rfind('"')].split(', ')
+                cols = [1, 4]
+                print(headers)
+                sub_df = pd.read_csv(file, sep=' ', usecols=cols, header=None,
+                                     skiprows=1,
+                                     names=[headers[c] for c in cols])#.dropna()
+                # sub_df = pd.read_csv(file, sep=' ')
                 print(sub_df.columns)
                 print(sub_df)
                 exit(44)
 
     # df = df.groupyby()
     print("Bye")
-exit(42)
+    exit(42)
 
 
 # ==============================================================================
@@ -131,6 +137,7 @@ else:
 
     df.to_csv(df_file)
 
+
 # ==============================================================================
 
 if True:
@@ -147,7 +154,7 @@ if True:
     instability_std = col_mapping["instability_std"] = "Instability (std)"
     df.rename(inplace=True, columns=col_mapping)
 
-    df[reward] = df[reward].map(lambda x: col_mapping[x])
+    df[reward] = df[reward].map(lambda _x: col_mapping[_x])
 
 else:
     groups = "groups"
@@ -160,6 +167,17 @@ else:
     speed_reward = "speed"
     instability_avg = "instability_avg"
     instability_std = "instability_std"
+
+
+df_gb_dg = df.groupby([all_groups, reward])
+
+filtered_df = df[df["dX"] >= .15]
+filtered_df_gb_dg = filtered_df.groupby([all_groups, reward])
+print("Filtered data:")
+print(pd.DataFrame({"Original": df_gb_dg.size(),
+                   "Filtered": filtered_df_gb_dg.size(),
+                    "Kept": 100 * filtered_df_gb_dg.size() / df_gb_dg.size()}))
+# df = filtered_df
 
 
 def _groups(_detailed): return all_groups if _detailed else groups
@@ -381,6 +399,13 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
 
 # ==============================================================================
 
+violinplot_common_args = dict(
+    inner="box", cut=0, gap=.25,
+    common_norm=True, density_norm="width"
+)
+
+# ==============================================================================
+
 
 def __key(*__args): return "_".join([str(x) for x in __args])
 
@@ -421,6 +446,19 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
     # plt.xscale('log', base=2)
     # pdf.savefig(g.figure, bbox_inches="tight")
     # plt.close()
+
+    for r in rewards:
+        _df = df[df[reward] == r]
+        for detailed in [False, True]:
+            g = sns.violinplot(
+                data=_df, x=_df[_groups(detailed)], y=_df[r] / _df[params],
+                hue=_groups(detailed), hue_order=hue_order(detailed),
+                order=hue_order(detailed),
+                **violinplot_common_args
+            )
+            g.set_ylabel(f"{r} / {params}")
+            summary_pdf.savefig(g.figure, bbox_inches="tight")
+            plt.close()
 
     def relplot(x, y, base=10, **kwargs):
         _detailed = kwargs.pop("detailed", False)
@@ -498,10 +536,8 @@ with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as 
         isS = is_synthesis(sns.violinplot, (c,))
         if not args.synthesis or isS:
             violinplot_args = dict(
-                # data=df, x=groups, y=c, hue=reward,
                 data=df, x=reward, y=c, hue=groups,
-                inner="box", cut=0, gap=.25,
-                common_norm=True, density_norm="width"
+                **violinplot_common_args
             )
 
             ax = sns.violinplot(**violinplot_args)

@@ -109,6 +109,7 @@ statannotations==0.7.2
 statsmodels==0.14.5
 StrEnum==0.4.15
 sympy==1.14.0
+tbparse==0.0.9
 tenacity==9.0.0
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2

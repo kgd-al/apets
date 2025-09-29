@@ -35,7 +35,7 @@ do
   if [ $trainer == "rlearn" ]
   then
     echo src/apets/hack/rl/train.py --rerun $folder/best_model.zip \
-      --rotated --reward $reward $depth $width --seed $seed --headless -T $duration \
+      --rotated --reward $reward $depth $width --seed $seed --movie -T $duration \
       --introspective
   else
     continue
