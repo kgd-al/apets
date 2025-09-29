@@ -1,4 +1,5 @@
 import argparse
+import glob
 import itertools
 import math
 import shutil
@@ -9,14 +10,13 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import tqdm
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from pandas import Series
 from sklearn.preprocessing import StandardScaler
-from tbparse import SummaryReader
+from tqdm.rich import tqdm
 
 matplotlib.use("agg")
 from apets.hack.hardware import extract_controller
@@ -29,32 +29,88 @@ args = parser.parse_args()
 
 # ==============================================================================
 
+runs = glob.glob("**/run-*/", root_dir=args.root, recursive=True)
+
+# ==============================================================================
+
 training_curves_file = args.root.joinpath("training_curves.pdf")
 if True and not args.synthesis and (args.purge or not training_curves_file.exists()):
     print("Hello")
-    for f in args.root.glob("**/run-*"):
-        training_curve = f.joinpath("_progress.csv")
-        if args.purge or not training_curve.exists():
+
+    cma_time = "evals"
+    cma_value = "fitness"
+
+    ppo_time = "time/total_timesteps"
+    ppo_value = "eval/mean_reward"
+
+    training_curves_data = args.root.joinpath("progress.csv")
+    if True or args.purge or not training_curves_data.exists():
+        dfs = []
+        for f in tqdm(runs, desc="Extracting training curves"):
+            f = args.root.joinpath(f)
+            reward = f.parts[-3]
+            subgroup = f.parts[-2] + "-" + f.parts[1].replace("rlearn", "ppo")
+            subgroup = subgroup[:3] + subgroup[4:5] + subgroup[-4:]
+            group = subgroup[:3] + subgroup[-4:]
+            print(f"{reward=}, {group=}, {subgroup=}")
+
             if (file := f.joinpath("progress.csv")).exists():
-                sub_df = pd.read_csv(file, index_col=0, usecols=[2, 17]).dropna()
-                # sub_df = pd.read_csv(file, index_col=0)
-                print(sub_df.columns)
-                print(sub_df)
-                exit(43)
+                # continue
+                sub_df = pd.read_csv(file)
+                sub_df = sub_df[[ppo_time, ppo_value]].dropna()
+                sub_df[ppo_time] /= 200
+                sub_df.rename(inplace=True, columns={
+                   ppo_time: "time", ppo_value: reward
+                })
 
             elif (file := f.joinpath("xrecentbest.dat")).exists():
-                print(file)
                 header = open(file).readline()
                 headers = header[header.find('"')+1: header.rfind('"')].split(', ')
                 cols = [1, 4]
-                print(headers)
                 sub_df = pd.read_csv(file, sep=' ', usecols=cols, header=None,
                                      skiprows=1,
                                      names=[headers[c] for c in cols])#.dropna()
-                # sub_df = pd.read_csv(file, sep=' ')
-                print(sub_df.columns)
-                print(sub_df)
-                exit(44)
+                sub_df = sub_df[[cma_time, cma_value]].dropna()
+                sub_df.rename(inplace=True, columns={
+                   cma_time: "time", cma_value: reward
+                })
+
+            else:
+                raise RuntimeError(f"No run data for {f}")
+
+            sub_df["run"] = f
+            sub_df["reward"] = reward
+            sub_df["group"] = group
+            sub_df["group-detailed"] = subgroup
+            dfs.append(sub_df)
+
+        t_dfs = pd.concat(dfs)
+        print(t_dfs)
+        t_dfs.set_index(["run", "time"], inplace=True)
+        print(t_dfs)
+        t_dfs = t_dfs[["reward", "kernels", "lazy", "distance", "group", "group-detailed"]]
+        print(t_dfs)
+        t_dfs.to_csv(training_curves_data)
+
+    else:
+        t_dfs = pd.read_csv(training_curves_data)
+
+    print(t_dfs)
+    t_dfs.drop("run", axis=1, inplace=True)
+
+    rewards = t_dfs["reward"].unique()
+    t_dfs_g = t_dfs.groupby(["reward", "group"], as_index=False)[["time"] + list(rewards)].aggregate(["mean", "std"])
+    print(t_dfs_g)
+
+    # t_dfs_gd = t_dfs.groupby(["reward", "group-detailed"]).agg(["mean", "std"])
+    exit(42)
+
+    with PdfPages(training_curves_file) as pdf:
+        for r in rewards:
+            print(f"Generating lineplot(time, {r})")
+            sns.lineplot(x="time", y=r, hue="group", data=t_dfs[t_dfs["reward"] == r])
+            pdf.savefig(bbox_inches="tight")
+            pdf.close()
 
     # df = df.groupyby()
     print("Bye")

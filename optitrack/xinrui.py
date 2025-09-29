@@ -227,7 +227,7 @@ class NatNetDataHandler:
                 target_rb = rb
                 break
 
-        if target_rb:
+        if target_rb and target_rb.tracking_valid:
             # Get positions (x, y, z)
             pos = np.array(target_rb.position)
 
@@ -250,7 +250,7 @@ class NatNetDataHandler:
 
             if self.verbose:
                 print(f"[RealSensor] \n--- Relative Pose (Timestamp: {timing.timestamp:.4f}s) ---")
-                print(f"[RealSensor] Target ({target_id}):")
+                print(f"[RealSensor] Target ({target_id}):  ({'valid' if target_rb.tracking_valid else 'invalid'})")
                 print(
                     f"[RealSensor] Position (x,y,z): {relative_pos[0]:.4f}, {relative_pos[1]:.4f}, {relative_pos[2]:.4f} meters")
                 print(
@@ -262,6 +262,14 @@ class NatNetDataHandler:
             with self._data_lock:
                 self.latest_relative_pos = relative_pos
                 self.latest_relative_quat = relative_quat
+
+        elif not target_rb.tracking_valid:
+            print()
+            print()
+            print()
+            print("[RealSensor] Warning: Tracking is invalid")
+            print()
+            print()
 
         else:
             if not target_rb:
@@ -367,7 +375,7 @@ class NatNetDataHandlerWithoutLock:
 
 if __name__ == "__main__":
     print("Hello")
-    sensor = RealSensor(ip_address="192.168.1.2")
+    sensor = RealSensor(ip_address="192.168.1.2", robot_id=4)
     sensor.start()
 
     start = time.time()
