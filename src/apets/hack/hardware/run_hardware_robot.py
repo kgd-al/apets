@@ -249,7 +249,7 @@ class RobotControllerTrackerFactory(BrainFactory):
         self.hinges = hinges
 
         names = [h.name for h in hinges]
-        print("[kgd-debug] hinges:", names)
+        # print("[kgd-debug] hinges:", names)
 
         self.plot_header = ["time"] + [f"{n}-obs" for n in names] + [f"{n}-ctrl" for n in names]
         self.plot_data = [[] for _ in range(1 + 2 * len(hinges))]
@@ -274,7 +274,7 @@ class RobotControllerTrackerFactory(BrainFactory):
                 except ValueError:
                     self.single_hinge = self._hinges.index(self._names[self.single_hinge])
 
-            print("[kgd-debug|Monitor::__init__] hinges:", self._names.keys())
+            # print("[kgd-debug|Monitor::__init__] hinges:", self._names.keys())
 
         def control(
             self,
@@ -282,8 +282,8 @@ class RobotControllerTrackerFactory(BrainFactory):
             sensor_state: ModularRobotSensorState,
             control_interface: ModularRobotControlInterface,
         ) -> None:
-            print(f"[kgd-debug|Monitor::control] {self._time}, {dt}")
-            print("[kgd-debug|Monitor::control] hinges:", [(i, h.name) for i, h in enumerate(self._hinges)])
+            # print(f"[kgd-debug|Monitor::control] {self._time}, {dt}")
+            # print("[kgd-debug|Monitor::control] hinges:", [(i, h.name) for i, h in enumerate(self._hinges)])
 
             if (sense_fn := getattr(self._brain_instance, "_get_observation", None)) is not None:
                 obs = sense_fn(sensor_state)
@@ -310,7 +310,7 @@ class RobotControllerTrackerFactory(BrainFactory):
 
             for _i, x in enumerate(itertools.chain([self._time], obs, actions)):
                 self._plot_data[_i].append(x)
-            print("[kgd-debug] last plot data line:", [f"{d[-1]:.2f}" for d in self._plot_data])
+            # print("[kgd-debug] last plot data line:", [f"{d[-1]:.2f}" for d in self._plot_data])
 
             if False:
                 control_interface._set_active_hinges = []
@@ -338,6 +338,10 @@ def main() -> None:
 
     group.add_argument("--brain", type=Path, help="Pre-processed controller for the robot. See `extract_controller.py`")
     group.add_argument("--reset", default=False, action="store_true", help="Reset hinges to 0")
+
+    group.add_argument("--run-when-ready", default=True,
+                       dest='start_paused', action="store_false",
+                       help="Whether to request user input before running")
 
     args = parser.parse_args()
 
@@ -408,12 +412,13 @@ def main() -> None:
         elif debugging:
             print("Ready to run. Doing so now")
         else:
-            print("Done. Press enter to start the brain.")
-            _in = input()
-            print(_in, len(_in))
-            if _in[:2].lower() != "go" and len(_in) > 0:
-                print("Exiting.")
-                exit(2)
+            if args.start_paused:
+                print("Done. Press enter to start the brain.")
+                _in = input()
+                print(_in, len(_in))
+                if _in[:2].lower() != "go" and len(_in) > 0:
+                    print("Exiting.")
+                    exit(2)
 
     """
     A configuration consists of the follow parameters:
@@ -465,7 +470,7 @@ def main() -> None:
 
     print("Plotting")
 
-    filename = Path(os.environ.get("PLOT_NAME", Path(args.brain).with_suffix("") or "hinges"))
+    filename = Path(os.environ.get("PLOT_NAME", Path(args.brain or "hinges").with_suffix("")))
     plot_data = brain.plot_data
 
     pd.DataFrame({header: data for header, data in zip(brain.plot_header, plot_data)}).set_index("time").to_csv(filename.with_suffix(".csv"))

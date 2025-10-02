@@ -29,93 +29,8 @@ args = parser.parse_args()
 
 # ==============================================================================
 
+sns.set_style("darkgrid")
 runs = glob.glob("**/run-*/", root_dir=args.root, recursive=True)
-
-# ==============================================================================
-
-training_curves_file = args.root.joinpath("training_curves.pdf")
-if True and not args.synthesis and (args.purge or not training_curves_file.exists()):
-    print("Hello")
-
-    cma_time = "evals"
-    cma_value = "fitness"
-
-    ppo_time = "time/total_timesteps"
-    ppo_value = "eval/mean_reward"
-
-    training_curves_data = args.root.joinpath("progress.csv")
-    if True or args.purge or not training_curves_data.exists():
-        dfs = []
-        for f in tqdm(runs, desc="Extracting training curves"):
-            f = args.root.joinpath(f)
-            reward = f.parts[-3]
-            subgroup = f.parts[-2] + "-" + f.parts[1].replace("rlearn", "ppo")
-            subgroup = subgroup[:3] + subgroup[4:5] + subgroup[-4:]
-            group = subgroup[:3] + subgroup[-4:]
-            print(f"{reward=}, {group=}, {subgroup=}")
-
-            if (file := f.joinpath("progress.csv")).exists():
-                # continue
-                sub_df = pd.read_csv(file)
-                sub_df = sub_df[[ppo_time, ppo_value]].dropna()
-                sub_df[ppo_time] /= 200
-                sub_df.rename(inplace=True, columns={
-                   ppo_time: "time", ppo_value: reward
-                })
-
-            elif (file := f.joinpath("xrecentbest.dat")).exists():
-                header = open(file).readline()
-                headers = header[header.find('"')+1: header.rfind('"')].split(', ')
-                cols = [1, 4]
-                sub_df = pd.read_csv(file, sep=' ', usecols=cols, header=None,
-                                     skiprows=1,
-                                     names=[headers[c] for c in cols])#.dropna()
-                sub_df = sub_df[[cma_time, cma_value]].dropna()
-                sub_df.rename(inplace=True, columns={
-                   cma_time: "time", cma_value: reward
-                })
-
-            else:
-                raise RuntimeError(f"No run data for {f}")
-
-            sub_df["run"] = f
-            sub_df["reward"] = reward
-            sub_df["group"] = group
-            sub_df["group-detailed"] = subgroup
-            dfs.append(sub_df)
-
-        t_dfs = pd.concat(dfs)
-        print(t_dfs)
-        t_dfs.set_index(["run", "time"], inplace=True)
-        print(t_dfs)
-        t_dfs = t_dfs[["reward", "kernels", "lazy", "distance", "group", "group-detailed"]]
-        print(t_dfs)
-        t_dfs.to_csv(training_curves_data)
-
-    else:
-        t_dfs = pd.read_csv(training_curves_data)
-
-    print(t_dfs)
-    t_dfs.drop("run", axis=1, inplace=True)
-
-    rewards = t_dfs["reward"].unique()
-    t_dfs_g = t_dfs.groupby(["reward", "group"], as_index=False)[["time"] + list(rewards)].aggregate(["mean", "std"])
-    print(t_dfs_g)
-
-    # t_dfs_gd = t_dfs.groupby(["reward", "group-detailed"]).agg(["mean", "std"])
-    exit(42)
-
-    with PdfPages(training_curves_file) as pdf:
-        for r in rewards:
-            print(f"Generating lineplot(time, {r})")
-            sns.lineplot(x="time", y=r, hue="group", data=t_dfs[t_dfs["reward"] == r])
-            pdf.savefig(bbox_inches="tight")
-            pdf.close()
-
-    # df = df.groupyby()
-    print("Bye")
-    exit(42)
-
 
 # ==============================================================================
 
@@ -196,8 +111,8 @@ else:
 
 # ==============================================================================
 
+col_mapping = {}
 if True:
-    col_mapping = {}
     groups = col_mapping["groups"] = "Groups"
     all_groups = col_mapping["detailed-groups"] = "Detailed groups"
     params = col_mapping["params"] = "Parameters"
@@ -206,6 +121,7 @@ if True:
     kernels_reward = col_mapping["kernels"] = "Gaussians"
     lazy_reward = col_mapping["lazy"] = "Gym-Ant"
     speed_reward = col_mapping["speed"] = "Speed"
+    col_mapping["distance"] = col_mapping["speed"]
     instability_avg = col_mapping["instability_avg"] = "Instability (avg)"
     instability_std = col_mapping["instability_std"] = "Instability (std)"
     df.rename(inplace=True, columns=col_mapping)
@@ -257,6 +173,132 @@ print(df)
 # print()
 # print(df.groupby(df.index.map(lambda _s: "/".join(_s.split('/')[1:4]))).size().to_string(max_rows=1000))
 # print()
+
+# ==============================================================================
+
+training_curves_file = args.root.joinpath("training_curves.pdf")
+if (not args.synthesis and (args.purge or not training_curves_file.exists())):
+    cma_time = "evals"
+    cma_value = "fitness"
+
+    ppo_time = "time/total_timesteps"
+    ppo_value = "eval/mean_reward"
+
+    max_samples = 20
+    clipped_range = (0, 10000)
+    min_sample_period = (clipped_range[1] - clipped_range[0]) / max_samples
+
+    ratios = []
+
+    training_curves_data = args.root.joinpath("progress.csv")
+    if args.purge or not training_curves_data.exists():
+        dfs = []
+        for f in tqdm(runs, desc="Extracting training curves"):
+            f = args.root.joinpath(f)
+            _trainer = f.parts[1].replace("rlearn", "ppo")
+            _reward = f.parts[-3]
+            _subgroup = f.parts[-2] + "-" + _trainer
+            _subgroup = _subgroup[:3] + _subgroup[4:5] + _subgroup[-4:]
+            if "cpg" in _subgroup:
+                _subgroup = _subgroup[:3] + _subgroup[4:]
+            _group = _subgroup[:3] + _subgroup[-4:]
+
+            # print(f"{_trainer=} {_reward=}, {_group=}, {_subgroup=}")
+
+            if (file := f.joinpath("progress.csv")).exists():
+                # continue
+                sub_df = pd.read_csv(file)
+                sub_df = sub_df[[ppo_time, ppo_value]].dropna()
+                sub_df[ppo_time] /= 200
+                sub_df.rename(inplace=True, columns={
+                   ppo_time: "time", ppo_value: _reward
+                })
+
+            elif (file := f.joinpath("xrecentbest.dat")).exists():
+                header = open(file).readline()
+                headers = header[header.find('"')+1: header.rfind('"')].split(', ')
+                cols = [1, 4]
+                sub_df = pd.read_csv(file, sep=' ', usecols=cols, header=None,
+                                     skiprows=1,
+                                     names=[headers[c] for c in cols])#.dropna()
+                sub_df = sub_df[[cma_time, cma_value]].dropna()
+                sub_df.rename(inplace=True, columns={
+                   cma_time: "time", cma_value: _reward
+                })
+                sub_df[_reward] *= -1
+
+            else:
+                raise RuntimeError(f"No run data for {f}")
+
+            sub_df[_reward] /= 30
+            if _reward == "kernels":
+                sub_df[_reward] /= 20
+
+            s_reward = _reward if _reward != "distance" else "speed"
+            raw_reward = sub_df[_reward].max()
+            expected_reward = pd.read_csv(f.joinpath("summary.csv"))[s_reward].iloc[-1]
+            ratios.append([
+                f,
+                _trainer, _reward, _group,
+                raw_reward / expected_reward
+            ])
+
+            if len(sub_df) > max_samples:
+                t = sub_df.time
+                t = t.clip(0, 10000)
+                t = min_sample_period * (t // min_sample_period).astype(np.int32)
+                sub_df = sub_df.groupby(t).max().drop(columns="time").reset_index(names="time")
+
+            sub_df["run"] = f
+            sub_df["reward"] = _reward
+            sub_df["groups"] = _group
+            sub_df["detailed-groups"] = _subgroup
+            dfs.append(sub_df)
+
+        t_dfs = pd.concat(dfs)
+        t_dfs = t_dfs[["run", "time", "reward", "kernels", "lazy", "distance", "groups", "detailed-groups"]]
+        t_dfs.to_csv(training_curves_data)
+
+        rdf = pd.DataFrame(ratios, columns=["Run", "Trainer", "Reward", "Group", "Ratio"])
+        print(rdf.groupby(["Trainer", "Reward", "Group"])["Ratio"].agg(["mean", "std"]))
+        rdf.to_csv("foo.csv")
+
+    else:
+        t_dfs = pd.read_csv(training_curves_data)
+
+    t_dfs.rename(inplace=True, columns=col_mapping)
+    t_dfs[reward] = t_dfs[reward].map(lambda _x: col_mapping[_x])
+
+    print(t_dfs.columns)
+    print(t_dfs)
+
+    t_dfs.drop("run", axis=1, inplace=True)
+
+    for r in rewards:
+        df.loc[df[reward] != r, r] = float("nan")
+
+    print()
+    print(df.groupby([groups])[rewards].aggregate(["mean", "std"]))
+    print()
+    print(df.groupby([all_groups])[rewards].aggregate(["mean", "std"]))
+    print()
+
+    with PdfPages(training_curves_file) as pdf:
+        for _detailed in [False, True]:
+            for r in rewards:
+                print(f"Generating lineplot(time, {r})")
+                g = sns.lineplot(
+                    x="time", y=r, data=t_dfs[t_dfs[reward] == r],
+                    hue=_groups(_detailed), hue_order=hue_order(_detailed),
+
+                )
+                g.set_xlabel("Episodes")
+                g.set_ylabel(r)
+                pdf.savefig(g.figure, bbox_inches="tight")
+                plt.close("all")
+
+
+# =============================================================================
 
 
 def showcase(_p, _out, _prefix=None):
@@ -402,7 +444,7 @@ if not args.synthesis and (args.purge or not trajectories_file.exists()):
         tdfs_trajs = {}
 
         sns_cp = sns.color_palette()
-        for f in tqdm.tqdm(
+        for f in tqdm(
                 args.root.glob("**/trajectory.csv"),
                 desc="Processing"):
             tdf = pd.read_csv(f, index_col=0)
@@ -491,7 +533,6 @@ def maybe_save(_g, _is_synthesis):
 pdf_summary_file = args.root.joinpath("summary.pdf")
 pdf_synthesis_file = args.root.joinpath("synthesis.pdf")
 print("Plotting...")
-sns.set_style("darkgrid")
 with PdfPages(pdf_summary_file) as summary_pdf, PdfPages(pdf_synthesis_file) as synthesis_pdf:
     # g = sns.scatterplot(df, x=params, y="depth")
     # plt.xscale('log', base=10)
