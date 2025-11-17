@@ -9,3 +9,7 @@ tmp/
 remote/
 *.egg-info/
 .python-version
+python_natnet
+
+*.csv
+*.pdf
