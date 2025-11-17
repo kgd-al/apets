@@ -85,7 +85,7 @@ def cpg_brain(weights, body, neighborhood, file):
         output_mapping=output_mapping,
     )
 
-    cpg_to_dot(body, brain, cpg_network_structure, file)
+    # cpg_to_dot(body, brain, cpg_network_structure, file)
 
     return brain
 
@@ -100,6 +100,8 @@ def mlp_brain(body, depth, width, weights):
 
 def main(args):
     file = args.file.name
+    assert args.file.exists(), f"'{file}' is not a regular file or does not exist"
+
     if file == "cma-es.pkl":
         brain = extract_cma(args)
 
@@ -159,12 +161,10 @@ if __name__ == "__main__":
                                      " model")
     parser.add_argument("file", type=Path,
                         help="path to the file to process")
-    parser.add_argument("--body", choices=["spider"],
+    parser.add_argument("--body", choices=["gecko", "spider"],
                         help="robot morphology", required=True)
     parser.add_argument("--quiet", "-q",
                         default=0, action="count",
                         help="I'll be quiet, sure")
 
-    args = parser.parse_args()
-
-    main(args)
+    main(parser.parse_args())

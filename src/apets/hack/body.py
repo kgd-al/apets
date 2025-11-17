@@ -67,12 +67,11 @@ def correctActiveHingeV2Init(hinge: ActiveHingeV2, rotation: float | RightAngles
         joint_offset=joint_offset,
         static_friction=1.0,
         dynamic_friction=1.0,
-        # armature=0.002,
-        armature=0.2,
+        # armature=0.002,  # Too low? Flying robots (mlp)
+        armature=0.002,  # Tweaked?
+        # armature=0.2,  # Too high -> over-smooth joints (cpg)
         pid_gain_p=5.0,
-        # pid_gain_p=10000.0,
-        # pid_gain_d=0.05,
-        pid_gain_d=0.1,
+        pid_gain_d=0.05,
         # child_offset=d - frame_offset/2 - servo_offset,
         child_offset=servo1_bounding_box[0]/2 + 0.002 + 0.01,
         sensors=[

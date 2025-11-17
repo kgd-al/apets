@@ -144,7 +144,7 @@ def train(args, model_file):
     args.rerun = ''
     args.movie = True
 
-    rerun(args, model_file)
+    rerun(args, eval_callback.best_model_save_path.joinpath("best_model.zip"))
 
     return model
 

@@ -244,7 +244,7 @@ def main() -> None:
 
     group = parser.add_argument_group("Evolution")
     group.add_argument("--body", default="spider",
-                       help=f"Morphology to use for the robot", choices=["spider"])
+                       help=f"Morphology to use for the robot", choices=["gecko", "spider"])
     group.add_argument("-r", "--rotated", default=False, action="store_true",
                        help="Whether the front of the robot is rotated by 45 degrees")
     group.add_argument("-b", "--budget", default=20, type=int,

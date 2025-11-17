@@ -491,13 +491,14 @@ class MoveFitness(SubTaskFitnessData):
             if self._introspective:
                 trajectory_data.to_csv(path.joinpath("trajectory.csv"))
 
-                fig, stats = self.plot_joints()
+                fig, stats = self.plot_joints(path.joinpath("real_joints_data.csv"))
                 pdf.savefig(fig)
                 stats.to_csv(path.joinpath("motors.csv"))
 
-                fig, stats = self.plot_bodies()
-                pdf.savefig(fig)
-                stats.to_csv(path.joinpath("steps.csv"))
+                if self._hinges == 8:
+                    fig, stats = self.plot_bodies()
+                    pdf.savefig(fig)
+                    stats.to_csv(path.joinpath("steps.csv"))
 
                 self._motor_data.to_csv(path.joinpath("joints_data.csv"))
                 self._bricks_data.to_csv(path.joinpath("bricks_data.csv"))
@@ -548,26 +549,45 @@ class MoveFitness(SubTaskFitnessData):
         fig.tight_layout()
         return fig
 
-    def plot_joints(self):
+    def plot_joints(self, ground_truth_path: Path):
         w, h = matplotlib.rcParams["figure.figsize"]
         fig, axes = plt.subplots(self._hinges, 2,
                                  sharex=True, sharey=True,
                                  figsize=(3*w, 2*h))
         sin_fit_stats = []
         x = self._motor_data.index
-        for ax, c in zip(axes.T.flat, self._motor_data.columns):
+
+        ground_truth = None
+        art_soft, art_hard = None, None
+        if ground_truth_path.exists():
+            ground_truth = pd.read_csv(ground_truth_path, index_col=0)
+            print(ground_truth.shape)
+            print(ground_truth.columns)
+            print(self._motor_data.shape)
+
+        for i, ax in enumerate(axes.T.flat):
+            c = self._motor_data.columns[i]
             y = self._motor_data[c]
-            ax.plot(x, y, label=c)
+            art_soft, = ax.plot(x, y, label=c)
             title = c
             try:
                 fit = fit_sin(x, y)
-                ax.plot(x, fit.pop("fn")(x))
+                # ax.plot(x, fit.pop("fn")(x))
                 fit["m"] = c
                 sin_fit_stats.append(fit)
                 title += ";" + fit["fn_str"]
             except RuntimeError:
                 pass
+
+            if ground_truth is not None:
+                art_hard, = ax.plot(x[1:], ground_truth.iloc[:, i], label=c)
+
             ax.set_title(title)
+
+        if ground_truth is not None:
+            fig.legend(handles=[art_soft, art_hard], labels=["Simulation", "Real-world"], loc="upper center",
+                       ncols=2, title=time.ctime())
+
         for ax in axes[-1, :]:
             ax.set_xlabel("Time (s)")
         fig.tight_layout()

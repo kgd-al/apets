@@ -4,9 +4,7 @@ import itertools
 import math
 import os
 import pickle
-import pprint
 import random
-import subprocess
 import time
 from enum import Enum, auto
 from pathlib import Path
@@ -15,7 +13,6 @@ from typing import Tuple, List, Optional
 import matplotlib
 import numpy as np
 import pandas as pd
-import torch
 from matplotlib import pyplot as plt
 
 from apets.hack.tensor_brain import TensorBrainFactory
@@ -25,7 +22,7 @@ from revolve2.modular_robot.body.base import ActiveHinge
 from revolve2.modular_robot.body.v2 import BodyV2, ActiveHingeV2, BrickV2
 from revolve2.modular_robot.brain import Brain as BrainFactory
 from revolve2.modular_robot.brain import BrainInstance
-from revolve2.modular_robot.brain.cpg import BrainCpgNetworkStatic
+from revolve2.modular_robot.brain.cpg import BrainCpgNetworkStatic, BrainCpgInstance
 from revolve2.modular_robot.sensor_state import ModularRobotSensorState
 from revolve2.modular_robot_physical import Config, UUIDKey
 from revolve2.modular_robot_physical.remote import run_remote
@@ -34,37 +31,38 @@ from revolve2.modular_robot_physical.remote import run_remote
 # assert "ThymioNet" in wifi, f"WRONG NETWORK: {wifi}"
 
 
-rng = random.Random(0)
-
-
-def gecko_v2() -> BodyV2:
+def gecko_v2() -> Tuple[BodyV2, List[ActiveHinge]]:
     """
     Sample robot with new HW config.
 
     :returns: the robot
     """
     body = BodyV2()
+    hinges = list()
 
-    body.core_v2.right_face.bottom = ActiveHingeV2(0.0)
+    def hinge(angle, name, mujoco_postfix):
+        h = ActiveHingeV2(angle)
+        h.name = name
+        h.mujoco_name = f"mbs1/actuator_position_mbs1_{mujoco_postfix}"
+        hinges.append(h)
+        return h
+
+    body.core_v2.right_face.bottom = hinge(0.0, "FR", "joint2")
     body.core_v2.right_face.bottom.attachment = BrickV2(0.0)
 
-    body.core_v2.left_face.bottom = ActiveHingeV2(0.0)
+    body.core_v2.left_face.bottom = hinge(0.0, "FL", "joint1")
     body.core_v2.left_face.bottom.attachment = BrickV2(0.0)
 
-    body.core_v2.back_face.bottom = ActiveHingeV2(np.pi / 2.0)
+    body.core_v2.back_face.bottom = hinge(np.pi / 2.0, "SS", "joint0")
     body.core_v2.back_face.bottom.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.back_face.bottom.attachment.front = ActiveHingeV2(np.pi / 2.0)
+    body.core_v2.back_face.bottom.attachment.front = hinge(np.pi / 2.0, "SE", "link0_joint1")
     body.core_v2.back_face.bottom.attachment.front.attachment = BrickV2(-np.pi / 2.0)
-    body.core_v2.back_face.bottom.attachment.front.attachment.left = ActiveHingeV2(0.0)
-    body.core_v2.back_face.bottom.attachment.front.attachment.right = ActiveHingeV2(0.0)
-    body.core_v2.back_face.bottom.attachment.front.attachment.left.attachment = BrickV2(
-        0.0
-    )
-    body.core_v2.back_face.bottom.attachment.front.attachment.right.attachment = (
-        BrickV2(0.0)
-    )
+    body.core_v2.back_face.bottom.attachment.front.attachment.left = hinge(0.0, "BL", "link0_link1_joint2")
+    body.core_v2.back_face.bottom.attachment.front.attachment.right = hinge(0.0, "BR", "link0_link1_joint1")
+    body.core_v2.back_face.bottom.attachment.front.attachment.left.attachment = BrickV2(0.0)
+    body.core_v2.back_face.bottom.attachment.front.attachment.right.attachment = BrickV2(0.0)
 
-    return body
+    return body, hinges
 
 
 def spider_v2() -> Tuple[BodyV2, List[ActiveHinge]]:
@@ -163,7 +161,7 @@ class HingePinDebuggingBrainFactory(BrainFactory):
 
         elif args.debug_hinges:
             n = len(hinges)
-            self._target_hinge = lambda t: hinges[min(n, int(n * t / args.duration))]
+            self._target_hinge = lambda t: hinges[min(n-1, int(n * t / args.duration))]
 
         d_type = args.debug_type
         if isinstance(d_type, str):
@@ -300,6 +298,10 @@ class RobotControllerTrackerFactory(BrainFactory):
                     (key, value) for key, value in control_interface._set_active_hinges
                     if key == UUIDKey(self._hinges[self.single_hinge])
                 ]
+                print([
+                    (key.value.name, key.value.mujoco_name, value) for key, value in
+                    control_interface._set_active_hinges
+                ])
 
             hinges_dict = dict(control_interface._set_active_hinges)
             actions = [hinges_dict.get(UUIDKey(h), float("nan")) for h in self._hinges]
@@ -366,15 +368,28 @@ def main() -> None:
     elif args.brain is not None:
         with open(args.brain, "rb") as f:
             brain = pickle.load(f)
+            print(brain)
 
             if isinstance(brain, BrainCpgNetworkStatic):
-                hinges_order = ['FRH', 'FRK', 'BLH', 'BLK', 'BRH', 'BRK', 'FLH', 'FLK']
+                if args.body == "spider":
+                    hinges_order = ['FRH', 'FRK', 'BLH', 'BLK', 'BRH', 'BRK', 'FLH', 'FLK']
+                elif args.body == "gecko":
+                    hinges_order = ["SS", "SE", "BR", "BL", "FR", "FL"]
+                    # hinges_order = ["FR", "FL", "SS", "SE", "BR", "BL"]
+                else:
+                    raise RuntimeError(f"Unsupported body type '{args.body}'")
 
                 brain._output_mapping = [(i, hinge_names[h_name]) for i, h_name in enumerate(hinges_order)]
                 print("CPG output mapping", [(i, h.name) for i, h in brain._output_mapping])
 
             elif isinstance(brain, TensorBrainFactory):
-                hinges_order = ['FRH', 'FRK', 'BLH', 'BLK', 'BRH', 'BRK', 'FLH', 'FLK']
+                if args.body == "spider":
+                    hinges_order = ['FRH', 'FRK', 'BLH', 'BLK', 'BRH', 'BRK', 'FLH', 'FLK']
+                elif args.body == "gecko":
+                    raise NotImplementedError
+                else:
+                    raise RuntimeError(f"Unsupported body type '{args.body}'")
+
                 brain._hinges = [hinge_names[h_name] for h_name in hinges_order]
                 brain.set_total_recall(True)
 
@@ -395,16 +410,43 @@ def main() -> None:
     
     For a concrete implementation look at the following example of mapping the robots`s hinges:
     """
-    assert args.body == "spider"
-    hinge_mapping = {
-        UUIDKey(hinge_names[name]): pin
-        for name, pin in [
-            ("FLH", 15), ("FLK", 14),
-            ("FRH", 0), ("FRK", 1),
-            ("BRH", 31), ("BRK", 30),
-            ("BLH", 16), ("BLK", 17),
-        ]
-    }
+    inverse_servos = {}
+    if args.body == "spider":
+        hinge_mapping = {
+            UUIDKey(hinge_names[name]): pin
+            for name, pin in [
+                ("FLH", 15), ("FLK", 14),
+                ("FRH", 0), ("FRK", 1),
+                ("BRH", 31), ("BRK", 30),
+                ("BLH", 16), ("BLK", 17),
+            ]
+        }
+
+    elif args.body == "gecko":
+        hinge_mapping = {
+            UUIDKey(hinge_names[name]): pin
+            for name, pin in [
+                ("FL", 0), ("FR", 31),
+                ("SS", 2), ("SE", 29),
+                ("BL", 1), ("BR", 30),
+            ]
+        }
+        inverse_servos = {
+            hinge_mapping[UUIDKey(hinge_names[name])]: True
+            for name in ["SS", "SE", "BR", "FR", "FL"]
+        }
+        print(inverse_servos)
+        # hinge_mapping = {
+        #     UUIDKey(hinge_names[name]): pin
+        #     for name, pin in [
+        #         ("FL", 16), ("FR", 15),
+        #         ("SS", 1), ("SE", 13),
+        #         ("BL", 17), ("BR", 14),
+        #     ]
+        # }
+
+    else:
+        raise RuntimeError
 
     def on_prepared() -> None:
         if args.reset:
@@ -419,6 +461,7 @@ def main() -> None:
                 if _in[:2].lower() != "go" and len(_in) > 0:
                     print("Exiting.")
                     exit(2)
+        time.sleep(.5)
 
     """
     A configuration consists of the follow parameters:
@@ -429,21 +472,22 @@ def main() -> None:
     - initial_hinge_positions: Initial positions for the active hinges. In Revolve2 the simulator defaults to 0.0.
     - inverse_servos: Sometimes servos on the physical robot are mounted backwards by accident. Here you inverse specific servos in software. Example: {13: True} would inverse the servo connected to GPIO pin 13.
     """
+    plot_filename = "hinges"
     if args.reset:
-        duration = 0
+        args.duration = .5
     elif args.debug_hinge is not None:
-        duration = 5
+        args.duration = 5
+        plot_filename = f"debug_hinge_{args.debug_hinge}"
     elif args.debug_hinges:
-        duration = 5 * len(hinges)
-    else:
-        duration = args.duration
+        args.duration = 5 * len(hinges)
+        plot_filename = f"debug_hinges"
     config = Config(
         modular_robot=robot,
         hinge_mapping=hinge_mapping,
-        run_duration=duration,
+        run_duration=args.duration,
         control_frequency=20,
         initial_hinge_positions={UUIDKey(h): 0.0 for h in hinges},
-        inverse_servos={},
+        inverse_servos=inverse_servos,
     )
 
     """
@@ -468,38 +512,49 @@ def main() -> None:
     if args.reset or args.no_plots:
         return
 
-    print("Plotting")
+    filename = Path(os.environ.get("PLOT_NAME", Path(args.brain or plot_filename).with_suffix(".pdf")))
+    print("Plotting", filename)
 
-    filename = Path(os.environ.get("PLOT_NAME", Path(args.brain or "hinges").with_suffix("")))
     plot_data = brain.plot_data
 
-    pd.DataFrame({header: data for header, data in zip(brain.plot_header, plot_data)}).set_index("time").to_csv(filename.with_suffix(".csv"))
+    plot_data = pd.DataFrame({header: data for header, data in zip(brain.plot_header, plot_data)}).set_index("time")
+    plot_data.to_csv(filename.with_suffix(".csv"))
 
     w, h = matplotlib.rcParams["figure.figsize"]
     fig, axes = plt.subplots(len(hinges), 2,
                              sharex=True, sharey=True,
                              figsize=(3 * w, 2 * h))
 
+    x = plot_data.index
+    samples = len(x)
+
     try:
         simu_data: Optional[pd.DataFrame] = brain.brain_factory.simu_data
+        print(simu_data.shape)
+        print(simu_data.columns)
+        samples = min(samples, len(simu_data.index))
+        sx = simu_data.index[:samples]
+
     except AttributeError:
         simu_data = None
+    print(plot_data.columns)
+    print(f"{samples=}")
 
-    x = np.array(plot_data[0])
+    x = plot_data.index[:samples]
     for i in range(len(hinges)):
-        for j in range(2):
+        for j, ptype in enumerate(["pos", "ctrl"]):
             ax = axes[i][j]
-            ix = 1 + j * len(hinges) + i
+            ax.grid()
+            ix = j * len(hinges) + i
 
-            art_hard, = ax.plot(x, plot_data[ix], zorder=1)
-            title = brain.plot_header[ix]
+            c = plot_data.columns[ix]
+            art_hard, = ax.plot(x, plot_data[c].head(samples), zorder=1)
+            title = c
 
             if simu_data is not None:
-                art_soft, = ax.plot(simu_data.index, simu_data.iloc[:, ix-1], zorder=-1)
-                title += " | " + simu_data.columns[ix-1]
-
-            ax.set_ylim(-1.2, 1.2)
-            # ax.set_xlim(-1, 16)
+                sc = f"{hinges[i].mujoco_name}-{ptype}"
+                art_soft, = ax.plot(sx, simu_data[sc].head(samples), zorder=-1)
+                title += " | " + sc
 
             ax.set_title(title)
 
@@ -508,7 +563,7 @@ def main() -> None:
                    ncols=2, title=time.ctime())
 
     fig.tight_layout()
-    fig.savefig(filename.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(filename, bbox_inches="tight")
 
 
 if __name__ == "__main__":

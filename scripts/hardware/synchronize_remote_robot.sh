@@ -34,4 +34,4 @@ ls $local_folder || exit 1
 
 sleep 5
 
-auto_action_on_write.sh -r src/ 'clear; date; echo; rsync -avzh src/apets/ '$local_folder'/kgd_apets/src/apets/ --include="*/" --include="*.py" --exclude="*"; printf "\a\n"'
+auto_action_on_write.sh -r src/ 'clear; date; echo; rsync -avzh src/apets/ '$local_folder'/kgd/apets/src/apets/ --include="*/" --include="*.py" --exclude="*"; printf "\a\n"'
