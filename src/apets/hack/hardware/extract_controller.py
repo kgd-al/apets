@@ -21,6 +21,7 @@ def cpg_to_dot(body, brain, cpg_network_structure, filename):
     modules_pos = {
         m: p for m, p in compute_positions(body).items()
     }
+    weights = brain._weight_matrix
 
     dot = graphviz.Graph(
         "CPG", "connectivity pattern",
@@ -63,8 +64,9 @@ def cpg_to_dot(body, brain, cpg_network_structure, filename):
     #     dot.node(name=str(c.index), pos=f"{pos.x},{pos.y}!")
 
     for c in cpg_network_structure.connections:
-        print()
-        dot.edge(f"H_{c.cpg_index_lowest.index}", f"H_{c.cpg_index_highest.index}")
+        i, j = c.cpg_index_lowest.index, c.cpg_index_highest.index
+        print(weights[i, j])
+        dot.edge(f"H_{i}", f"H_{j}")
 
     print(filename)
     print(dot.source)
