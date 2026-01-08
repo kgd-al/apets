@@ -316,8 +316,8 @@ class _Visualizer:
                 self._last_step = time.time()
                 self._target_fps = 1/60.
 
-            camera.fixedcamid = data.camera(self.camera).id
-            camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            # camera.fixedcamid = data.camera(self.camera).id
+            # camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
 
     @property
     def alive(self):

@@ -22,6 +22,7 @@ from revolve2.modular_robot.brain.cpg import (
 )
 from revolve2.simulation.simulator import RecordSettings
 from revolve2.standards import modular_robots_v2
+from revolve2.standards import modular_robots_v1
 from revolve2.standards.simulation_parameters import STANDARD_CONTROL_FREQUENCY
 
 
@@ -60,12 +61,9 @@ Module.neighbours = __fixed_neighbors
 
 
 def bco(body_name, neighborhood):
-    body = modular_robots_v2.get(body_name)
+    body = modular_robots_v1.get(body_name)
 
-    modules_pos = {
-        m: p for m, p in compute_positions(body).items()
-    }
-    active_hinges = [m for m in modules_pos if isinstance(m, ActiveHinge)]
+    active_hinges = body.find_modules_of_type(ActiveHinge)
 
     # Create a structure for the CPG network from these hinges.
     # This also returns a mapping between active hinges and the index of there corresponding cpg in the network.
@@ -91,7 +89,8 @@ def environment_arguments(args):
     )
 
     if args.arch == "mlp":
-        body = modular_robots_v2.get(args.body)
+        # body = modular_robots_v2.get(args.body)
+        body = modular_robots_v1.get(args.body)
         assert args.depth is not None
         assert args.width is not None
         env_args.update(dict(
@@ -182,7 +181,7 @@ def rerun(args):
 
         return_ff=True,
 
-        start_paused=True
+        start_paused=False
     ))
     if args.movie:
         env_kwargs["record_settings"] = RecordSettings(
@@ -196,11 +195,11 @@ def rerun(args):
 
     evaluator = Environment(**env_kwargs)
 
-    with open(folder.joinpath("cma-es.pkl"), "rb") as f:
-        es = pickle.loads(f.read())
+    # with open(folder.joinpath("cma-es.pkl"), "rb") as f:
+    #     es = pickle.loads(f.read())
 
     start_time = time.time()
-    fitness_function = evaluator.evaluate(es.result.xbest)
+    fitness_function = evaluator.evaluate(np.random.default_rng(0).uniform(-1, 1, evaluator._params))
     fitness = -fitness_function.fitness
 
     steps_per_episode = (getattr(args, "evolution_simulation_time", args.simulation_time)
@@ -244,7 +243,7 @@ def main() -> None:
 
     group = parser.add_argument_group("Evolution")
     group.add_argument("--body", default="spider",
-                       help=f"Morphology to use for the robot", choices=["gecko", "spider"])
+                       help=f"Morphology to use for the robot")
     group.add_argument("-r", "--rotated", default=False, action="store_true",
                        help="Whether the front of the robot is rotated by 45 degrees")
     group.add_argument("-b", "--budget", default=20, type=int,
