@@ -181,7 +181,7 @@ def rerun(args):
 
         return_ff=True,
 
-        start_paused=False
+        start_paused=args.start_paused
     ))
     if args.movie:
         env_kwargs["record_settings"] = RecordSettings(
@@ -272,6 +272,7 @@ def main() -> None:
     group.add_argument("--movie", default=False, action="store_true", )
     group.add_argument("--headless", default=False, action="store_true", )
     group.add_argument("--introspective", default=False, action="store_true",)
+    group.add_argument("--start-paused", default=False, action="store_true",)
 
     args = parser.parse_args()
 
